@@ -80,7 +80,7 @@ func TestKernelManagerNewAndInstallKernels(t *testing.T) {
 		t.Error(err)
 	}
 
-	if err := km.CommitToBootLoader(); err != nil {
+	if err := km.CommitToBootLoader(true); err != nil {
 		t.Errorf("Could not commit to bootloader: %v", err)
 	}
 
@@ -144,7 +144,7 @@ func TestKernelManager_noCmdLine(t *testing.T) {
 		t.Errorf("Could not install kernels: %v", err)
 	}
 
-	if err := km.CommitToBootLoader(); err != nil {
+	if err := km.CommitToBootLoader(true); err != nil {
 		t.Errorf("Could not commit to bootloader: %v", err)
 	}
 

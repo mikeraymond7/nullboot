@@ -34,6 +34,7 @@ type BootManager struct {
 	entries        map[int]BootEntryVariable // The Boot<number> variables
 	bootOrder      []int                     // The BootOrder variable, parsed
 	bootOrderAttrs efi.VariableAttributes    // The attributes of BootOrder variable
+	bootNext       int
 }
 
 // NewBootManagerFromSystem returns a new BootManager object, initialized with the system state.
@@ -187,11 +188,11 @@ func (bm *BootManager) DeleteEntry(bootNum int) error {
 	return nil
 }
 
-// PrependAndSetBootOrder commits a new boot order or returns an error.
+// PrependBootOrder commits a new boot order or returns an error.
 //
 // The boot order specified is prepended to the existing one, and the order
 // is deduplicated before committing.
-func (bm *BootManager) PrependAndSetBootOrder(head []int) error {
+func (bm *BootManager) PrependBootOrder(head []int) []int {
 	var newOrder []int
 
 	// Combine head with existing boot order, filter out duplicates and non-existing entries
@@ -206,10 +207,14 @@ func (bm *BootManager) PrependAndSetBootOrder(head []int) error {
 			newOrder = append(newOrder, num)
 		}
 	}
+	return newOrder
+}
 
+// SetBootOrder commits a new boot order or returns an error.
+func (bm *BootManager) SetBootOrder(newBootOrder []int) error {
 	// Encode the boot order to bytes
 	var output []byte
-	for _, num := range newOrder {
+	for _, num := range newBootOrder {
 		var numBytes [2]byte
 		binary.LittleEndian.PutUint16(numBytes[0:], uint16(num))
 		output = append(output, numBytes[0], numBytes[1])
@@ -219,8 +224,21 @@ func (bm *BootManager) PrependAndSetBootOrder(head []int) error {
 	if err := bm.efivars.SetVariable(efi.GlobalVariable, "BootOrder", output, bm.bootOrderAttrs); err != nil {
 		return err
 	}
+	bm.bootOrder = newBootOrder
 
-	bm.bootOrder = newOrder
 	return nil
 
+}
+
+// Set the BootNext variable as a kernel fallback
+func (bm *BootManager) SetBootNext(nextBootEntry int) error {
+	// Encode the boot next to bytes
+	var bootNext [2]byte
+	binary.LittleEndian.PutUint16(bootNext[0:], uint16(nextBootEntry))
+	if err := bm.efivars.SetVariable(efi.GlobalVariable, "BootNext", bootNext[0:], bm.bootOrderAttrs); err != nil {
+		return err
+	}
+
+	bm.bootNext = nextBootEntry
+	return nil
 }

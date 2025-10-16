@@ -11,6 +11,7 @@ import "os"
 
 var noTPM = flag.Bool("no-tpm", false, "Do not do any resealing with the TPM")
 var noEfivars = flag.Bool("no-efivars", false, "Do not use or update the EFI variables")
+var completeKernelUpgrade = flag.Bool("complete-kernel-upgrade", false, "Update the BootOrder variable upon a successful boot into a new kernel")
 var outputJSON = flag.String("output-json", "", "JSON file to write (also disables writing real EFI variables)")
 
 func main() {
@@ -96,7 +97,8 @@ func main() {
 		log.Print(err)
 		os.Exit(1)
 	}
-	if err = km.CommitToBootLoader(); err != nil {
+
+	if err = km.CommitToBootLoader(*completeKernelUpgrade); err != nil {
 		log.Print(err)
 		os.Exit(1)
 	}

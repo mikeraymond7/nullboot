@@ -168,7 +168,8 @@ func TestBootManagerSetBootOrder(t *testing.T) {
 		t.Fatalf("Could not create boot manager: %v", err)
 	}
 
-	if err := bm.PrependAndSetBootOrder([]int{2}); err != nil {
+	bootOrder := bm.PrependBootOrder([]int{2})
+	if err := bm.SetBootOrder(bootOrder); err != nil {
 		t.Errorf("Failed to commit boot order: %v", err)
 	}
 	if !reflect.DeepEqual(bm.bootOrder, []int{2, 1}) {
@@ -249,7 +250,8 @@ func TestBootManager_json(t *testing.T) {
 	if want := (efi.DevicePath{efi.NewFilePathDevicePathNode("/path2")}); !reflect.DeepEqual(want, pathGot) {
 		t.Fatalf("Expected path %v, got %v", want, pathGot)
 	}
-	if err := bm.PrependAndSetBootOrder([]int{0, 1}); err != nil {
+	bootOrder := bm.PrependBootOrder([]int{0, 1})
+	if err := bm.SetBootOrder(bootOrder); err != nil {
 		t.Errorf("Failed to commit boot order: %v", err)
 	}
 	if !reflect.DeepEqual(bm.bootOrder, []int{0, 1}) {

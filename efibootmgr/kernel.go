@@ -159,7 +159,7 @@ func (km *KernelManager) RemoveObsoleteKernels() error {
 }
 
 // CommitToBootLoader updates the firmware BDS entries and shim's boot.csv
-func (km *KernelManager) CommitToBootLoader() error {
+func (km *KernelManager) CommitToBootLoader(updateBootOrder bool) error {
 	log.Print("Configuring shim fallback loader")
 
 	// We completely own the shim fallback file, so just write it
@@ -199,15 +199,25 @@ func (km *KernelManager) CommitToBootLoader() error {
 		if !isObsolete {
 			continue
 		}
-
 		if err := km.bootManager.DeleteEntry(ev.BootNumber); err != nil {
 			log.Printf("Could not delete Boot%04X: %v", ev.BootNumber, err)
 		}
 	}
 
-	// Set the boot order
-	if err := km.bootManager.PrependAndSetBootOrder(ourBootOrder); err != nil {
-		return fmt.Errorf("Could not set boot order: %w", err)
+	// Prepend any possible updates to the existing BootOrder
+	newBootOrder := km.bootManager.PrependBootOrder(ourBootOrder)
+
+	// This flag forces boot order update even when there is a new kernel
+	if newBootOrder[0] == km.bootManager.bootOrder[0] || updateBootOrder {
+		// Set the boot order
+		if err := km.bootManager.SetBootOrder(newBootOrder); err != nil {
+			return fmt.Errorf("Could not set boot order: %w", err)
+		}
+	} else {
+		// If the first boot entry has changed, enable kernel fallback mechanism
+		if err := km.bootManager.SetBootNext(newBootOrder[0]); err != nil {
+			return fmt.Errorf("Could not set BootNext: %w", err)
+		}
 	}
 
 	return nil
