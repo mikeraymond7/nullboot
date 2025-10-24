@@ -122,6 +122,7 @@ func (km *KernelManager) InstallKernels() error {
 			Options:     options,
 			Description: fmt.Sprintf("Ubuntu entry for kernel %s", skVersion),
 		})
+		km.targetKernels = append(km.targetKernels, sk)
 	}
 
 	return nil
@@ -142,6 +143,7 @@ func (km *KernelManager) RemoveObsoleteKernels() error {
 	var remaining []string
 	for _, tk := range km.targetKernels {
 		if !km.isObsoleteKernel(tk) {
+			remaining = append(remaining, tk)
 			continue
 		}
 		if err := appFs.Remove(path.Join(km.targetDir, tk)); err != nil {
