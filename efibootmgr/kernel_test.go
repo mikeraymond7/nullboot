@@ -41,6 +41,7 @@ func TestKernelManagerNewAndInstallKernels(t *testing.T) {
 	afero.WriteFile(memFs, "/usr/lib/linux/kernel.efi-1.0-12-generic", []byte("1.0-12-generic"), 0644)
 	afero.WriteFile(memFs, "/usr/lib/linux/kernel.efi-1.0-1-generic", []byte("1.0-1-generic"), 0644)
 	afero.WriteFile(memFs, "/boot/efi/EFI/ubuntu/<dummy>", []byte(""), 0644)
+	afero.WriteFile(memFs, "/boot/efi/EFI/ubuntu/kernel.efi-obsolete", []byte("obsolete"), 0644)
 	afero.WriteFile(memFs, "/etc/kernel/cmdline", []byte("root=magic"), 0644)
 	afero.WriteFile(memFs, "/boot/efi/EFI/ubuntu/shimx64.efi", []byte("file a"), 0644)
 	mockvars := MockEFIVariables{
@@ -64,13 +65,20 @@ func TestKernelManagerNewAndInstallKernels(t *testing.T) {
 	if !reflect.DeepEqual(km.sourceKernels, wantSourceKernels) {
 		t.Fatalf("Expected %v, got %v", wantSourceKernels, km.sourceKernels)
 	}
-	var wantTargetKernels []string
+	wantTargetKernels := []string{"kernel.efi-obsolete"}
 	if !reflect.DeepEqual(km.targetKernels, wantTargetKernels) {
 		t.Fatalf("Expected %v, got %v", wantTargetKernels, km.targetKernels)
 	}
 
+	fmt.Printf("\n\n\ntargetKernels before install: %v\n", km.targetKernels)
 	if err := km.InstallKernels(); err != nil {
 		t.Errorf("Could not install kernels: %v", err)
+	}
+	fmt.Printf("\n\n\ntargetKernels after install: %v\n", km.targetKernels)
+	fmt.Printf("\n\n\nsourceKernels after install: %v\n", km.sourceKernels)
+	wantTargetKernels = []string{"kernel.efi-obsolete", "kernel.efi-1.0-12-generic", "kernel.efi-1.0-1-generic"}
+	if !reflect.DeepEqual(km.targetKernels, wantTargetKernels) {
+		t.Fatalf("Expected %v, got %v", wantTargetKernels, km.targetKernels)
 	}
 
 	if err := CheckFilesEqual(memFs, "/usr/lib/linux/kernel.efi-1.0-12-generic", "/boot/efi/EFI/ubuntu/kernel.efi-1.0-12-generic"); err != nil {
@@ -80,8 +88,23 @@ func TestKernelManagerNewAndInstallKernels(t *testing.T) {
 		t.Error(err)
 	}
 
+	if _, err := bm.FindOrCreateEntry(BootEntry{Filename: "kernel.efi-obsolete", Label: "Not Ubuntu with obsolete kernel", Options: ""}, "/boot/efi/EFI/ubuntu"); err != nil {
+		t.Fatal(err)
+	}
 	if err := km.CommitToBootLoader(true); err != nil {
 		t.Errorf("Could not commit to bootloader: %v", err)
+	}
+	fmt.Printf("\n\n\nsourceKernels after commit: %v\n", km.sourceKernels)
+	if err := km.RemoveObsoleteKernels(); err != nil {
+		t.Errorf("Could not remove obsolete kernels: %v", err)
+	}
+	fmt.Printf("\n\n\nsourceKernels after removing obsolete: %v\n", km.sourceKernels)
+	fmt.Printf("\n\n\ntargetKernels after removing obsolete: %v\n", km.sourceKernels)
+	fmt.Printf("\n\n\nBootEntries after removing obsolete: %v\n", km.bootManager.entries)
+	fmt.Printf("\n\n\nBootOrder after removing obsolete: %v\n", km.bootManager.bootOrder)
+	wantTargetKernels = []string{"kernel.efi-1.0-12-generic", "kernel.efi-1.0-1-generic"}
+	if !reflect.DeepEqual(km.targetKernels, wantTargetKernels) {
+		t.Fatalf("Expected %v, got %v", wantTargetKernels, km.targetKernels)
 	}
 
 	file, err := memFs.Open("/boot/efi/EFI/ubuntu/BOOT" + strings.ToUpper(GetEfiArchitecture()) + ".CSV")
@@ -216,8 +239,9 @@ func TestKernelManagerRemoveObsoleteKernels(t *testing.T) {
 		t.Errorf("did not expect obsolete kernel to be present")
 	}
 
-	if km.targetKernels != nil {
-		t.Errorf("expected list of target kernels to be empty now, got: %v", km.targetKernels)
+	wantTargetKernels := []string{"kernel.efi-1.0-12-generic"}
+	if !reflect.DeepEqual(km.targetKernels, wantTargetKernels) {
+		t.Fatalf("Expected %v, got %v", wantTargetKernels, km.targetKernels)
 	}
 
 }
