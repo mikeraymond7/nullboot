@@ -221,3 +221,78 @@ func TestKernelManagerRemoveObsoleteKernels(t *testing.T) {
 	}
 
 }
+
+func TestKernelManagerSetKernelFallback(t *testing.T) {
+	// Mock EFI variables
+	mockvars := MockEFIVariables{
+		map[efi.VariableDescriptor]mockEFIVariable{
+			{GUID: efi.GlobalVariable, Name: "BootOrder"}: {[]byte{1, 0, 2, 0, 3, 0}, 123},
+			{GUID: efi.GlobalVariable, Name: "Boot0000"}:  {UsbrBootCdromOptBytes, 42},
+			{GUID: efi.GlobalVariable, Name: "Boot0001"}:  {UsbrBootCdromOptBytes, 43},
+			{GUID: efi.GlobalVariable, Name: "Boot0003"}:  {UsbrBootCdromOptBytes, 44},
+		},
+	}
+
+	// Mock Boot and Kernel Managers
+	bm, err := NewBootManagerForVariables(&mockvars)
+	if err != nil {
+		t.Fatalf("Could not create boot manager: %v", err)
+	}
+	km, err := NewKernelManager("/boot/efi", "/usr/lib/linux", "ubuntu", &bm)
+	if err != nil {
+		t.Fatalf("Could not create kernel manager: %v", err)
+	}
+
+	// Mock memory map for files that are expected to exist in
+	// this fake file system
+	memFs := afero.NewMemMapFs()
+	appFs = MapFS{memFs}
+
+	// Add boot entries to Kernel Manager
+	for i := range 3 {
+		afero.WriteFile(memFs, fmt.Sprintf("/boot/efi/EFI/ubuntu/k%d.efi", i), []byte("1.0-12-generic"), 0644)
+		bootEntry := BootEntry{
+			Filename:    fmt.Sprintf("k%d.efi", i),
+			Label:       fmt.Sprintf("Ubuntu kernel %d", i),
+			Options:     fmt.Sprintf(" \\ k%d", i),
+			Description: fmt.Sprintf("Ubuntu kernel entry %d", i),
+		}
+		km.bootEntries = append(km.bootEntries, bootEntry)
+		bootNum, err := km.bootManager.FindOrCreateEntry(bootEntry, "/boot/efi/EFI/ubuntu")
+		if err != nil {
+			t.Fatalf("Could not create boot entry for k%d: %v", i, err)
+		}
+		fmt.Printf("Assigned Boot%04X\n", bootNum)
+	}
+
+	fmt.Printf("BootEntries: %v\n", km.bootEntries)
+	// Function we are testing
+	if err := km.SetKernelFallback(); err != nil {
+		t.Errorf("Unable to set kernel fallback mechanism: %v", err)
+	}
+
+	// Check BootNext is set correctly
+	// Expecting 2 becuase we've set 0, 1, 3
+	// Boot0002 will be the first created in the loop above
+	expectedInternalBootNext := 2
+	expectedSystemBootNext := []byte{2, 0}
+	systemBootNext := mockvars.store[efi.VariableDescriptor{GUID: efi.GlobalVariable, Name: "BootNext"}].data
+	if !bytes.Equal(mockvars.store[efi.VariableDescriptor{GUID: efi.GlobalVariable, Name: "BootNext"}].data, expectedSystemBootNext) {
+		t.Errorf("System BootNext is not correct, expected: %v, got: %v", expectedSystemBootNext, systemBootNext)
+	}
+	if bm.bootNext != expectedInternalBootNext {
+		t.Errorf("Internal BootNext is not correct, expected: %v, got: %v", expectedInternalBootNext, km.bootManager.bootNext)
+	}
+
+	// Check BootOrder is not changed
+	expectedInternalBootOrder := []int{1, 2, 3}
+	expectedSystemBootOrder := []byte{1, 0, 2, 0, 3, 0}
+
+	if !reflect.DeepEqual(km.bootManager.bootOrder, expectedInternalBootOrder) {
+		t.Errorf("Internal BootOrder was unexpectedly modified, expected: %v, got: %v", expectedInternalBootOrder, km.bootManager.bootOrder)
+	}
+	systemBootOrder := mockvars.store[efi.VariableDescriptor{GUID: efi.GlobalVariable, Name: "BootOrder"}].data
+	if !bytes.Equal(systemBootOrder, expectedSystemBootOrder) {
+		t.Errorf("System BootOrder was unexpectedly modified, expected: %v, got: %v", expectedSystemBootOrder, systemBootOrder)
+	}
+}

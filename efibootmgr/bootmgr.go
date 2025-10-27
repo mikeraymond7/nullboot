@@ -33,6 +33,7 @@ type BootManager struct {
 	efivars        EFIVariables              // EFIVariables implementation
 	entries        map[int]BootEntryVariable // The Boot<number> variables
 	bootOrder      []int                     // The BootOrder variable, parsed
+	bootNext       int                       // The BootNext variable, parsed
 	bootOrderAttrs efi.VariableAttributes    // The attributes of BootOrder variable
 }
 
@@ -46,6 +47,7 @@ func NewBootManagerForVariables(efivars EFIVariables) (BootManager, error) {
 	var err error
 	bm := BootManager{}
 	bm.efivars = efivars
+	bm.bootNext = -1
 
 	if !VariablesSupported(efivars) {
 		return BootManager{}, fmt.Errorf("Variables not supported")
@@ -210,9 +212,8 @@ func (bm *BootManager) PrependAndSetBootOrder(head []int) error {
 	// Encode the boot order to bytes
 	var output []byte
 	for _, num := range newOrder {
-		var numBytes [2]byte
-		binary.LittleEndian.PutUint16(numBytes[0:], uint16(num))
-		output = append(output, numBytes[0], numBytes[1])
+		bootNumBytes := getBootNumBytes(num)
+		output = append(output, bootNumBytes[0], bootNumBytes[1])
 	}
 
 	// Set the boot order and update our cache
@@ -223,4 +224,24 @@ func (bm *BootManager) PrependAndSetBootOrder(head []int) error {
 	bm.bootOrder = newOrder
 	return nil
 
+}
+
+func (bm *BootManager) SetBootNext(bootNum int) error {
+	_, _, err := bm.efivars.GetVariable(efi.GlobalVariable, fmt.Sprintf("Boot%04X", bootNum))
+	if err != nil {
+		return fmt.Errorf("Unable to find Boot%04X: %v", bootNum, err)
+	}
+	bootNumBytes := getBootNumBytes(bootNum)
+	if err := bm.efivars.SetVariable(efi.GlobalVariable, "BootNext", bootNumBytes[0:], bm.bootOrderAttrs); err != nil {
+		return err
+	}
+
+	bm.bootNext = bootNum
+	return nil
+}
+
+func getBootNumBytes(bootNum int) [2]byte {
+	var numBytes [2]byte
+	binary.LittleEndian.PutUint16(numBytes[0:], uint16(bootNum))
+	return numBytes
 }

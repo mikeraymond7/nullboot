@@ -11,6 +11,7 @@ import "os"
 
 var noTPM = flag.Bool("no-tpm", false, "Do not do any resealing with the TPM")
 var noEfivars = flag.Bool("no-efivars", false, "Do not use or update the EFI variables")
+var enableKernelFallback = flag.Bool("enable-kernel-fallback", false, "Set the BootNext variable to the latest kernel in ESP and do not modify any other EFI variables")
 var outputJSON = flag.String("output-json", "", "JSON file to write (also disables writing real EFI variables)")
 
 func main() {
@@ -25,6 +26,12 @@ func main() {
 		vendor          = "ubuntu"
 	)
 
+	if *enableKernelFallback {
+		if *noTPM || *noEfivars || *outputJSON == "" {
+			log.Println("-enable-kernel-fallback cannot be enabled with other flags")
+			os.Exit(1)
+		}
+	}
 	// FIXME: Let's actually add some arg parsing and stuff?
 	if !*noTPM {
 		assets, err = efibootmgr.ReadTrustedAssets()
@@ -96,52 +103,58 @@ func main() {
 		log.Print(err)
 		os.Exit(1)
 	}
-	if err = km.CommitToBootLoader(); err != nil {
-		log.Print(err)
-		os.Exit(1)
-	}
-	// Cleanup old entries
-	if err = km.RemoveObsoleteKernels(); err != nil {
-		log.Print(err)
-		os.Exit(1)
-	}
-	if err = km.CommitToBootLoader(); err != nil {
-		log.Print(err)
-		os.Exit(1)
-	}
-
-	if assets != nil {
-		assets.RemoveObsolete()
-		if err := assets.Save(); err != nil {
-			log.Println("cannot update list of trusted boot assets:", err)
+	// Only set BootNext to latest kernel version
+	// Conduct no destructive operations
+	if *enableKernelFallback {
+		km.SetKernelFallback()
+	} else {
+		if err = km.CommitToBootLoader(); err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		// Cleanup old entries
+		if err = km.RemoveObsoleteKernels(); err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		if err = km.CommitToBootLoader(); err != nil {
+			log.Print(err)
 			os.Exit(1)
 		}
 
-		// Final reseal to remove obsolete assets from profile
-		if err := efibootmgr.ResealKey(assets, km, esp, shimSourceDir, vendor); err != nil {
-			log.Println("final reseal failed:", err)
-			os.Exit(1)
-		}
-	}
+		if assets != nil {
+			assets.RemoveObsolete()
+			if err := assets.Save(); err != nil {
+				log.Println("cannot update list of trusted boot assets:", err)
+				os.Exit(1)
+			}
 
-	if jsonEfivars, ok := efivars.(*efibootmgr.MockEFIVariables); ok {
-		json, err := jsonEfivars.JSON()
-		if err != nil {
-			log.Println("cannot write json:", err)
-			os.Exit(2)
+			// Final reseal to remove obsolete assets from profile
+			if err := efibootmgr.ResealKey(assets, km, esp, shimSourceDir, vendor); err != nil {
+				log.Println("final reseal failed:", err)
+				os.Exit(1)
+			}
 		}
 
-		f, err := os.Create(*outputJSON)
-		if err != nil {
-			log.Printf("Could not open JSON output file %s: %v", *outputJSON, err)
-			os.Exit(1)
-		}
-		defer f.Close()
+		if jsonEfivars, ok := efivars.(*efibootmgr.MockEFIVariables); ok {
+			json, err := jsonEfivars.JSON()
+			if err != nil {
+				log.Println("cannot write json:", err)
+				os.Exit(2)
+			}
 
-		_, err = f.Write(json)
-		if err != nil {
-			log.Printf("Could not write JSON output file %s: %v", *outputJSON, err)
-			os.Exit(1)
+			f, err := os.Create(*outputJSON)
+			if err != nil {
+				log.Printf("Could not open JSON output file %s: %v", *outputJSON, err)
+				os.Exit(1)
+			}
+			defer f.Close()
+
+			_, err = f.Write(json)
+			if err != nil {
+				log.Printf("Could not write JSON output file %s: %v", *outputJSON, err)
+				os.Exit(1)
+			}
 		}
 	}
 }

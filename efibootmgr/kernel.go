@@ -212,3 +212,16 @@ func (km *KernelManager) CommitToBootLoader() error {
 
 	return nil
 }
+
+func (km *KernelManager) SetKernelFallback() error {
+	latestKernel := km.bootEntries[0]
+	bootNum, err := km.bootManager.FindOrCreateEntry(latestKernel, km.targetDir)
+	if err != nil {
+		return fmt.Errorf("Failure to add boot entry for %s: %w", latestKernel.Label, err)
+	}
+	if err := km.bootManager.SetBootNext(bootNum); err != nil {
+		return fmt.Errorf("Failure to set BootNext for %s, Boot%04X: %w", latestKernel.Label, bootNum, err)
+	}
+
+	return nil
+}

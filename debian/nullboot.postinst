@@ -2,7 +2,7 @@
 set -e
 if [ "$1" = "triggered" ] || [ "$1" = "configure" ]; then
     if [ -e "/boot/efi/EFI/ubuntu/" ]; then
-        nullbootctl
+        nullbootctl -enable-kernel-fallback
     fi
 fi
 
