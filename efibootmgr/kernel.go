@@ -225,3 +225,39 @@ func (km *KernelManager) SetKernelFallback() error {
 
 	return nil
 }
+
+func (km *KernelManager) BootLoaderNeedsUpdate() (bool, error) {
+	fmt.Printf("bootCurrent: %v\n", km.bootManager.bootCurrent)
+	fmt.Printf("bootOrder[0]: %v\n", km.bootManager.bootOrder[0])
+	fmt.Printf("bootEntries[0]: %v\n", km.bootEntries[0])
+	fmt.Printf("bootEntries[1]: %v\n", km.bootEntries[1])
+	fmt.Printf("bootEntries: %v\n", km.bootEntries)
+	fmt.Printf("entries[%d]: %v\n", km.bootManager.bootCurrent, km.bootManager.entries[km.bootManager.bootCurrent])
+	fmt.Printf("entries[1]: %v\n", km.bootManager.entries[1])
+	fmt.Printf("sourceKernels[0]: %v\n", km.sourceKernels[0])
+	if km.bootManager.bootOrder[0] == km.bootManager.bootCurrent {
+		// Could indicate a fallback or that no update occurred
+		// No changes needed
+		fmt.Println("They are equal :)")
+		return false, nil
+	} else {
+		fmt.Println("They are NOT equal :(")
+		latestKernel := km.bootEntries[0]
+		bootNum, err := km.bootManager.FindOrCreateEntry(latestKernel, km.targetDir)
+		fmt.Printf("Found Boot%04X\n", bootNum)
+		if err != nil {
+			fmt.Errorf("Unable to find boot entry for %s: %v", latestKernel.Label, err)
+
+		}
+
+		// Indicates a successful boot into a new kernel, requiring remediation
+		if bootNum == km.bootManager.bootCurrent {
+			fmt.Println("A successful kernel upgrade has occurred")
+			return true, nil
+		}
+
+		// Could indicate a failure to boot into BootOrder[0]
+		return false, fmt.Errorf("Detected a possible boot failure: BootCurrent = %d, BootOrder = %v", km.bootManager.bootCurrent, km.bootManager.bootOrder)
+	}
+	return false, nil
+}

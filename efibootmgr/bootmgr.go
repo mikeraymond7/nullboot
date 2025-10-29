@@ -34,6 +34,7 @@ type BootManager struct {
 	entries        map[int]BootEntryVariable // The Boot<number> variables
 	bootOrder      []int                     // The BootOrder variable, parsed
 	bootNext       int                       // The BootNext variable, parsed
+	bootCurrent    int                       // The BootCurrent variable, parsed
 	bootOrderAttrs efi.VariableAttributes    // The attributes of BootOrder variable
 }
 
@@ -47,12 +48,30 @@ func NewBootManagerForVariables(efivars EFIVariables) (BootManager, error) {
 	var err error
 	bm := BootManager{}
 	bm.efivars = efivars
-	bm.bootNext = -1
 
 	if !VariablesSupported(efivars) {
 		return BootManager{}, fmt.Errorf("Variables not supported")
 	}
 
+	// BootNext - should not be set
+	bootNextBytes, _, err := bm.efivars.GetVariable(efi.GlobalVariable, "BootNext")
+	if err != nil {
+		bm.bootNext = -1
+	} else {
+		bm.bootNext = int(binary.LittleEndian.Uint16(bootNextBytes[:]))
+		log.Printf("The BootNext variable has been initialized on the system to Boot%04X\n", bm.bootNext)
+	}
+
+	// BootCurrent
+	bootCurrentBytes, _, err := bm.efivars.GetVariable(efi.GlobalVariable, "BootCurrent")
+	if err != nil {
+		log.Println("Could not read BootCurrent variable, populating with default (-1) error was:", err)
+		bm.bootCurrent = -1
+	} else {
+		bm.bootCurrent = int(binary.LittleEndian.Uint16(bootCurrentBytes[:]))
+	}
+
+	// Boot Order
 	bootOrderBytes, bootOrderAttrs, err := bm.efivars.GetVariable(efi.GlobalVariable, "BootOrder")
 	if err != nil {
 		log.Println("Could not read BootOrder variable, populating with default, error was:", err)
@@ -66,6 +85,7 @@ func NewBootManagerForVariables(efivars EFIVariables) (BootManager, error) {
 		bm.bootOrder[i/2] = int(binary.LittleEndian.Uint16(bootOrderBytes[i : i+2]))
 	}
 
+	// BootXXXX
 	bm.entries = make(map[int]BootEntryVariable)
 	names, err := GetVariableNames(bm.efivars, efi.GlobalVariable)
 	if err != nil {

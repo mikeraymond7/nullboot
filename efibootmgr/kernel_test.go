@@ -34,6 +34,68 @@ func CheckFilesEqual(fs afero.Fs, want string, got string) error {
 
 }
 
+func CreateMockFileSystem() afero.Fs {
+	memFs := afero.NewMemMapFs()
+	appFs = MapFS{memFs}
+	afero.WriteFile(memFs, "/usr/lib/linux/kernel.efi-1.0-1-generic", []byte("1.0-1-generic"), 0644)
+	afero.WriteFile(memFs, "/usr/lib/linux/kernel.efi-1.0-12-generic", []byte("1.0-12-generic"), 0644)
+	afero.WriteFile(memFs, "/boot/efi/EFI/ubuntu/<dummy>", []byte(""), 0644)
+	afero.WriteFile(memFs, "/boot/efi/EFI/ubuntu/shimx64.efi", []byte("file a"), 0644)
+
+	return memFs
+}
+func BasicMockVars() MockEFIVariables {
+	// Mock EFI variables
+	mockvars := MockEFIVariables{
+		map[efi.VariableDescriptor]mockEFIVariable{
+			{GUID: efi.GlobalVariable, Name: "BootOrder"}:   {[]byte{1, 0, 2, 0, 3, 0}, 123},
+			{GUID: efi.GlobalVariable, Name: "BootCurrent"}: {[]byte{1, 0}, 1},
+			{GUID: efi.GlobalVariable, Name: "Boot0000"}:    {UsbrBootCdromOptBytes, 42},
+			{GUID: efi.GlobalVariable, Name: "Boot0001"}:    {UsbrBootCdromOptBytes, 43},
+			{GUID: efi.GlobalVariable, Name: "Boot0003"}:    {UsbrBootCdromOptBytes, 44},
+		},
+	}
+	return mockvars
+}
+
+func BasicKm(mockvars MockEFIVariables) (*KernelManager, error) {
+
+	// Mock Boot and Kernel Managers
+	bm, err := NewBootManagerForVariables(&mockvars)
+	if err != nil {
+		err = fmt.Errorf("Could not create boot manager: %v", err)
+	}
+	km, err := NewKernelManager("/boot/efi", "/usr/lib/linux", "ubuntu", &bm)
+	if err != nil {
+		err = fmt.Errorf("Could not create kernel manager: %v", err)
+	}
+	return km, err
+}
+
+func CreateMockBootEntries(km *KernelManager) error {
+	// Mock memory map for files that are expected to exist in
+	// this fake file system
+	memFs := afero.NewMemMapFs()
+	appFs = MapFS{memFs}
+
+	// Add boot entries to Kernel Manager
+	for i := range 3 {
+		afero.WriteFile(memFs, fmt.Sprintf("/boot/efi/EFI/ubuntu/k%d.efi", i), []byte("1.0-12-generic"), 0644)
+		bootEntry := BootEntry{
+			Filename:    fmt.Sprintf("k%d.efi", i),
+			Label:       fmt.Sprintf("Ubuntu kernel %d", i),
+			Options:     fmt.Sprintf(" \\ k%d", i),
+			Description: fmt.Sprintf("Ubuntu kernel entry %d", i),
+		}
+		km.bootEntries = append(km.bootEntries, bootEntry)
+		_, err := km.bootManager.FindOrCreateEntry(bootEntry, "/boot/efi/EFI/ubuntu")
+		if err != nil {
+			return fmt.Errorf("Could not create boot entry for k%d: %v", i, err)
+		}
+	}
+	return nil
+}
+
 func TestKernelManagerNewAndInstallKernels(t *testing.T) {
 	appArchitecture = "x64"
 	memFs := afero.NewMemMapFs()
@@ -223,64 +285,30 @@ func TestKernelManagerRemoveObsoleteKernels(t *testing.T) {
 }
 
 func TestKernelManagerSetKernelFallback(t *testing.T) {
-	// Mock EFI variables
-	mockvars := MockEFIVariables{
-		map[efi.VariableDescriptor]mockEFIVariable{
-			{GUID: efi.GlobalVariable, Name: "BootOrder"}: {[]byte{1, 0, 2, 0, 3, 0}, 123},
-			{GUID: efi.GlobalVariable, Name: "Boot0000"}:  {UsbrBootCdromOptBytes, 42},
-			{GUID: efi.GlobalVariable, Name: "Boot0001"}:  {UsbrBootCdromOptBytes, 43},
-			{GUID: efi.GlobalVariable, Name: "Boot0003"}:  {UsbrBootCdromOptBytes, 44},
-		},
-	}
-
-	// Mock Boot and Kernel Managers
-	bm, err := NewBootManagerForVariables(&mockvars)
+	mockvars := BasicMockVars()
+	km, err := BasicKm(mockvars)
 	if err != nil {
-		t.Fatalf("Could not create boot manager: %v", err)
-	}
-	km, err := NewKernelManager("/boot/efi", "/usr/lib/linux", "ubuntu", &bm)
-	if err != nil {
-		t.Fatalf("Could not create kernel manager: %v", err)
+		t.Fatalf("Unable to construct basic KernelManager: %v", err)
 	}
 
-	// Mock memory map for files that are expected to exist in
-	// this fake file system
-	memFs := afero.NewMemMapFs()
-	appFs = MapFS{memFs}
-
-	// Add boot entries to Kernel Manager
-	for i := range 3 {
-		afero.WriteFile(memFs, fmt.Sprintf("/boot/efi/EFI/ubuntu/k%d.efi", i), []byte("1.0-12-generic"), 0644)
-		bootEntry := BootEntry{
-			Filename:    fmt.Sprintf("k%d.efi", i),
-			Label:       fmt.Sprintf("Ubuntu kernel %d", i),
-			Options:     fmt.Sprintf(" \\ k%d", i),
-			Description: fmt.Sprintf("Ubuntu kernel entry %d", i),
-		}
-		km.bootEntries = append(km.bootEntries, bootEntry)
-		bootNum, err := km.bootManager.FindOrCreateEntry(bootEntry, "/boot/efi/EFI/ubuntu")
-		if err != nil {
-			t.Fatalf("Could not create boot entry for k%d: %v", i, err)
-		}
-		fmt.Printf("Assigned Boot%04X\n", bootNum)
+	if err = CreateMockBootEntries(km); err != nil {
+		t.Fatalf("Unable to create mock boot entries: %v", err)
 	}
 
-	fmt.Printf("BootEntries: %v\n", km.bootEntries)
 	// Function we are testing
 	if err := km.SetKernelFallback(); err != nil {
 		t.Errorf("Unable to set kernel fallback mechanism: %v", err)
 	}
 
 	// Check BootNext is set correctly
-	// Expecting 2 becuase we've set 0, 1, 3
-	// Boot0002 will be the first created in the loop above
+	// Boot0002 will be the first created in CreateMockBootEntries
 	expectedInternalBootNext := 2
 	expectedSystemBootNext := []byte{2, 0}
 	systemBootNext := mockvars.store[efi.VariableDescriptor{GUID: efi.GlobalVariable, Name: "BootNext"}].data
 	if !bytes.Equal(mockvars.store[efi.VariableDescriptor{GUID: efi.GlobalVariable, Name: "BootNext"}].data, expectedSystemBootNext) {
 		t.Errorf("System BootNext is not correct, expected: %v, got: %v", expectedSystemBootNext, systemBootNext)
 	}
-	if bm.bootNext != expectedInternalBootNext {
+	if km.bootManager.bootNext != expectedInternalBootNext {
 		t.Errorf("Internal BootNext is not correct, expected: %v, got: %v", expectedInternalBootNext, km.bootManager.bootNext)
 	}
 
@@ -294,5 +322,27 @@ func TestKernelManagerSetKernelFallback(t *testing.T) {
 	systemBootOrder := mockvars.store[efi.VariableDescriptor{GUID: efi.GlobalVariable, Name: "BootOrder"}].data
 	if !bytes.Equal(systemBootOrder, expectedSystemBootOrder) {
 		t.Errorf("System BootOrder was unexpectedly modified, expected: %v, got: %v", expectedSystemBootOrder, systemBootOrder)
+	}
+}
+
+func TestKernelManagerBootLoaderNeedsUpdate(t *testing.T) {
+	// Create a fake filesytem and override read/write operations
+	CreateMockFileSystem()
+
+	// Mock EFI variables
+	mockvars := BasicMockVars()
+
+	// Mock Boot and Kernel Managers
+	km, err := BasicKm(mockvars)
+	if err != nil {
+		t.Fatalf("Unable to construct basic KernelManager: %v", err)
+	}
+
+	// Populate some misc boot entries
+	CreateMockBootEntries(km)
+
+	km.bootManager.bootCurrent = 2
+	if needsUpdate, err := km.BootLoaderNeedsUpdate(); needsUpdate != true || err != nil {
+		t.Errorf("Expected true, nil but got: %v, %v", needsUpdate, err)
 	}
 }

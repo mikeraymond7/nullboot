@@ -12,6 +12,7 @@ import "os"
 var noTPM = flag.Bool("no-tpm", false, "Do not do any resealing with the TPM")
 var noEfivars = flag.Bool("no-efivars", false, "Do not use or update the EFI variables")
 var enableKernelFallback = flag.Bool("enable-kernel-fallback", false, "Set the BootNext variable to the latest kernel in ESP and do not modify any other EFI variables")
+var remediateBootLoader = flag.Bool("remediate-boot-loader", false, "Update EFI variables and assets if CurrentBoot is the latest kernel and is not the first entry in the BootOrder")
 var outputJSON = flag.String("output-json", "", "JSON file to write (also disables writing real EFI variables)")
 
 func main() {
@@ -26,8 +27,15 @@ func main() {
 		vendor          = "ubuntu"
 	)
 
+	if *remediateBootLoader {
+		if *enableKernelFallback || *noTPM || *noEfivars || *outputJSON == "" {
+			log.Println("-remediate-boot-loader cannot be enabled with other flags")
+			os.Exit(1)
+		}
+	}
+
 	if *enableKernelFallback {
-		if *noTPM || *noEfivars || *outputJSON == "" {
+		if *remediateBootLoader || *noTPM || *noEfivars || *outputJSON == "" {
 			log.Println("-enable-kernel-fallback cannot be enabled with other flags")
 			os.Exit(1)
 		}
@@ -103,11 +111,23 @@ func main() {
 		log.Print(err)
 		os.Exit(1)
 	}
+
+	if *remediateBootLoader {
+		var updateBootLoader bool
+		if updateBootLoader, err = km.BootLoaderNeedsUpdate(); err != nil {
+			log.Println("Unable to determine if running kernel is latest:", err)
+			os.Exit(1)
+		}
+		if !updateBootLoader {
+
+		}
+
+	}
 	// Only set BootNext to latest kernel version
 	// Conduct no destructive operations
 	if *enableKernelFallback {
 		km.SetKernelFallback()
-	} else {
+	} else if updateBootLoader {
 		if err = km.CommitToBootLoader(); err != nil {
 			log.Print(err)
 			os.Exit(1)
