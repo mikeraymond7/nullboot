@@ -226,7 +226,10 @@ func (km *KernelManager) SetKernelFallback() error {
 	return nil
 }
 
-func (km *KernelManager) BootLoaderNeedsUpdate() (bool, error) {
+// IsNewKernelRunning determines whether BootOrder accurately represents
+// the state of the system; a new kernel is running when
+// BootCurrent != BootOrder[0] but BootCurrent is the latest available kernel
+func (km *KernelManager) IsNewKernelRunning() (bool, error) {
 	fmt.Printf("bootCurrent: %v\n", km.bootManager.bootCurrent)
 	fmt.Printf("bootOrder[0]: %v\n", km.bootManager.bootOrder[0])
 	fmt.Printf("bootEntries[0]: %v\n", km.bootEntries[0])
@@ -238,11 +241,11 @@ func (km *KernelManager) BootLoaderNeedsUpdate() (bool, error) {
 	if km.bootManager.bootOrder[0] == km.bootManager.bootCurrent {
 		// Could indicate a fallback or that no update occurred
 		// No changes needed
-		fmt.Println("They are equal :)")
 		return false, nil
 	} else {
-		fmt.Println("They are NOT equal :(")
+		// km.bootEntries is sorted on version number
 		latestKernel := km.bootEntries[0]
+		km.bootManager.FindEntry(latestKernel, tm.targetDir)
 		bootNum, err := km.bootManager.FindOrCreateEntry(latestKernel, km.targetDir)
 		fmt.Printf("Found Boot%04X\n", bootNum)
 		if err != nil {
@@ -259,5 +262,4 @@ func (km *KernelManager) BootLoaderNeedsUpdate() (bool, error) {
 		// Could indicate a failure to boot into BootOrder[0]
 		return false, fmt.Errorf("Detected a possible boot failure: BootCurrent = %d, BootOrder = %v", km.bootManager.bootCurrent, km.bootManager.bootOrder)
 	}
-	return false, nil
 }

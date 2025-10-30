@@ -114,12 +114,13 @@ func main() {
 
 	if *remediateBootLoader {
 		var updateBootLoader bool
-		if updateBootLoader, err = km.BootLoaderNeedsUpdate(); err != nil {
+		if updateBootLoader, err = km.IsNewKernelRunning(); err != nil {
 			log.Println("Unable to determine if running kernel is latest:", err)
 			os.Exit(1)
 		}
 		if !updateBootLoader {
-
+			log.Println("BootCurrent is still the first entry of BootOrder, no need to update")
+			os.Exit(0)
 		}
 
 	}
@@ -127,7 +128,7 @@ func main() {
 	// Conduct no destructive operations
 	if *enableKernelFallback {
 		km.SetKernelFallback()
-	} else if updateBootLoader {
+	} else {
 		if err = km.CommitToBootLoader(); err != nil {
 			log.Print(err)
 			os.Exit(1)

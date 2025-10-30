@@ -44,6 +44,7 @@ func CreateMockFileSystem() afero.Fs {
 
 	return memFs
 }
+
 func BasicMockVars() MockEFIVariables {
 	// Mock EFI variables
 	mockvars := MockEFIVariables{

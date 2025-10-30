@@ -129,12 +129,16 @@ func (bm *BootManager) NextFreeEntry() (int, error) {
 //
 // The argument relativeTo specifies the directory entry.Filename is in.
 func (bm *BootManager) FindOrCreateEntry(entry BootEntry, relativeTo string) (int, error) {
-	bootNext, err := bm.NextFreeEntry()
-	if err != nil {
-		return -1, err
+	bootNum, err := FindEntry(entry, relativeTo)
+	if bootNum == -1 {
+		if err != nil {
+			return -1, fmt.Errorf("Unable to find BootEntry: %v", err)
+		}
+		bootNum, err = CreateEntry()
 	}
-	variable := fmt.Sprintf("Boot%04X", bootNext)
-
+	return bootNum, err
+}
+func (bm *BootManager) FindEntry(entry BootEntry, relativeTo string) (*BootEntryVariable, error) {
 	dp, err := bm.efivars.NewFileDevicePath(path.Join(relativeTo, entry.Filename), efi_linux.ShortFormPathHD)
 	if err != nil {
 		return -1, err
@@ -155,7 +159,7 @@ func (bm *BootManager) FindOrCreateEntry(entry BootEntry, relativeTo string) (in
 	}
 
 	entryVar := BootEntryVariable{
-		BootNumber: bootNext,
+		BootNumber: -1,
 		Data:       loadoptionBytes,
 		Attributes: efi.AttributeNonVolatile | efi.AttributeBootserviceAccess | efi.AttributeRuntimeAccess,
 		LoadOption: loadoption,
@@ -167,7 +171,11 @@ func (bm *BootManager) FindOrCreateEntry(entry BootEntry, relativeTo string) (in
 			return existingVar.BootNumber, nil
 		}
 	}
+	return -1, nil
+}
 
+func (bm *BootManager) CreateEntry(entryVar *BootEntryVariable) {
+	bootNum, err := bm.NextFreeEntry()
 	if err := bm.efivars.SetVariable(efi.GlobalVariable, variable, entryVar.Data, entryVar.Attributes); err != nil {
 		return -1, err
 	}
@@ -246,6 +254,8 @@ func (bm *BootManager) PrependAndSetBootOrder(head []int) error {
 
 }
 
+// SetBootNext sets the BootNext EFI variable to the boot number
+// specified of bootNum
 func (bm *BootManager) SetBootNext(bootNum int) error {
 	_, _, err := bm.efivars.GetVariable(efi.GlobalVariable, fmt.Sprintf("Boot%04X", bootNum))
 	if err != nil {
