@@ -71,6 +71,7 @@ type BootManager struct {
 	efivars        EFIVariables              // EFIVariables implementation
 	entries        map[int]BootEntryVariable // The Boot<number> variables
 	bootOrder      []int                     // The BootOrder variable, parsed
+	bootCurrent    int                       // The BootCurrent variable, parsed
 	bootOrderAttrs efi.VariableAttributes    // The attributes of BootOrder variable
 }
 
@@ -87,6 +88,15 @@ func NewBootManagerForVariables(efivars EFIVariables) (BootManager, error) {
 
 	if !VariablesSupported(efivars) {
 		return BootManager{}, fmt.Errorf("Variables not supported")
+	}
+
+	bootCurrentBytes, _, err := bm.efivars.GetVariable(efi.GlobalVariable, "BootCurrent")
+	if err != nil {
+		// This should only happen when using MockEFIVariables
+		log.Printf("Could not read BootCurrent variable, populating with default (%d), error was: %v\n", invalidBootNumber, err)
+		bm.bootCurrent = invalidBootNumber
+	} else {
+		bm.bootCurrent = int(binary.LittleEndian.Uint16(bootCurrentBytes[0:2]))
 	}
 
 	bootOrderBytes, bootOrderAttrs, err := bm.efivars.GetVariable(efi.GlobalVariable, "BootOrder")
@@ -241,6 +251,10 @@ func (bm *BootManager) DeleteEntry(bootNum int) error {
 	variable := GetBootEntryName(bootNum)
 	if _, ok := bm.entries[bootNum]; !ok {
 		return fmt.Errorf("Tried deleting a non-existing variable %s", variable)
+	}
+
+	if bootNum == bm.bootCurrent {
+		return fmt.Errorf("Attempted to delete %s, which is also BootCurrent", GetBootEntryName(bootNum))
 	}
 
 	if err := DelVariable(bm.efivars, efi.GlobalVariable, variable); err != nil {
