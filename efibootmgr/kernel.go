@@ -1,4 +1,3 @@
-// This file is part of nullboot
 // Copyright 2021 Canonical Ltd.
 // SPDX-License-Identifier: GPL-3.0-only
 
@@ -234,4 +233,26 @@ func (km *KernelManager) SetKernelFallback() error {
 	}
 
 	return nil
+}
+
+func (km *KernelManager) IsCurrentBootLatest() (bool, error) {
+	if len(km.bootEntries) == 0 {
+		return false, fmt.Errorf("no Ubuntu Kernel EFIs have been loaded")
+	}
+
+	// Find BootEntryVariable equivalent of BootEntry
+	// NOTE: km.bootEntries are sorted on version number
+	// km.bootEntries[0] is therefore expected to be latest
+	latestKernelEntry := km.bootEntries[0]
+	latestKernelEntryVar, err := km.bootManager.FindBootEntryVariable(latestKernelEntry, km.targetDir)
+	if err != nil {
+		return false, fmt.Errorf("unable to find latest kernel boot variable: %w", err)
+	}
+
+	// Determine if the BootEntryVariable is the BootCurrent variable
+	if latestKernelEntryVar.BootNumber == km.bootManager.bootCurrent {
+		return true, nil
+	} else {
+		return false, nil
+	}
 }
