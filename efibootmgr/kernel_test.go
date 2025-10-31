@@ -273,3 +273,117 @@ func TestKernelManagerSetKernelFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestKernelManagerIsNewKernelInstalled(t *testing.T) {
+	type TestCase struct {
+		name          string
+		latestKernel  int
+		bootOrder0    int
+		bootVariables []int
+		expected      bool
+	}
+	tests := []TestCase{
+		{
+			name:          "Installed new kernel",
+			latestKernel:  2,
+			bootOrder0:    1,
+			bootVariables: []int{1},
+			expected:      true,
+		},
+		{
+			name:          "No new kernel installed",
+			latestKernel:  2,
+			bootOrder0:    2,
+			bootVariables: []int{2},
+			expected:      false,
+		},
+	}
+	for _, tt := range tests {
+		t.Logf("Testing: %s", tt.name)
+		installedKernels := []int{tt.latestKernel}
+		bootOrder := []int{tt.bootOrder0}
+		var bootCurrent int
+		mockEnv, err := NewMockEnv(installedKernels, tt.bootVariables, bootOrder, bootCurrent)
+		if err != nil {
+			t.Fatalf("Unable to initialize mock environment: %v", err)
+		}
+
+		isNewKernelInstalled, err := mockEnv.km.IsNewKernelInstalled()
+		if err != nil {
+			t.Fatalf("Unable to determine if a new kernel is installed: %v", err)
+		}
+		if isNewKernelInstalled != tt.expected {
+			t.Errorf("%s: Expected %t, got %t", tt.name, tt.expected, isNewKernelInstalled)
+		}
+	}
+}
+
+func TestKernelManagerIsCurrentBootLatest(t *testing.T) {
+	type TestCase struct {
+		name             string
+		installedKernels []int
+		bootVariables    []int
+		bootCurrent      int
+		expected         bool
+		isErr            bool
+	}
+	tests := []TestCase{
+		{
+			name:             "Current Boot Is Latest",
+			installedKernels: []int{2, 3},
+			bootVariables:    []int{2, 3},
+			bootCurrent:      2,
+			expected:         true,
+			isErr:            false,
+		},
+		{
+			name:             "Current Boot Is Not Latest",
+			installedKernels: []int{6, 1},
+			bootVariables:    []int{1, 6},
+			bootCurrent:      1,
+			expected:         false,
+			isErr:            false,
+		},
+		{
+			name:             "Boot variable does not exist",
+			installedKernels: []int{2},
+			bootVariables:    []int{1},
+			bootCurrent:      1,
+			expected:         false,
+			isErr:            true,
+		},
+		{
+			name:             "BootCurrent does not exist",
+			installedKernels: []int{2},
+			bootVariables:    []int{2},
+			bootCurrent:      1,
+			expected:         false,
+			isErr:            true,
+		},
+		{
+			name:             "No kernels installed",
+			installedKernels: []int{},
+			bootVariables:    []int{1},
+			expected:         false,
+			isErr:            true,
+		},
+	}
+	for _, tt := range tests {
+		t.Logf("Testing: %s", tt.name)
+		var bootOrder []int
+		mockEnv, err := NewMockEnv(tt.installedKernels, tt.bootVariables, bootOrder, tt.bootCurrent)
+		if err != nil {
+			t.Fatalf("Unable to initialize mock environment: %v", err)
+		}
+
+		isCurrentBootLatest, err := mockEnv.km.IsCurrentBootLatest()
+		if err != nil {
+			if !tt.isErr {
+				t.Errorf("%s: Unexpected error: %v", tt.name, err)
+			}
+		}
+		if isCurrentBootLatest != tt.expected {
+			t.Errorf("%s: Expected %t, got %t", tt.name, tt.expected, isCurrentBootLatest)
+		}
+	}
+}

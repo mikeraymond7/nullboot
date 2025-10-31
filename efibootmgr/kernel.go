@@ -1,4 +1,3 @@
-// This file is part of nullboot
 // Copyright 2021 Canonical Ltd.
 // SPDX-License-Identifier: GPL-3.0-only
 
@@ -230,4 +229,42 @@ func (km *KernelManager) SetKernelFallback() error {
 	}
 
 	return nil
+}
+
+// IsNewKernelInstalled determines if the latest kernel is installed but
+// not yet a system boot variable.
+//
+// Returns whether or not a new kernel is installed and nil or an error if
+// there is an error in attempting to find the BootEntryVariable associated
+// to the entry.
+func (km *KernelManager) IsNewKernelInstalled() (bool, error) {
+	latestKernelEntryVar, err := km.bootManager.FindBootEntryVar(&km.bootEntries[0], km.targetDir)
+	if err != nil {
+		return false, fmt.Errorf("Cannot determine if the latest kernel has an existing boot entry: %v", err)
+	}
+	// If the kernel entry is found, then it already exists as a boot variable
+	return latestKernelEntryVar == nil, nil
+}
+
+func (km *KernelManager) IsCurrentBootLatest() (bool, error) {
+	if len(km.bootEntries) == 0 {
+		return false, fmt.Errorf("No Ubuntu Kernel EFIs have been loaded")
+	}
+
+	// Find BootEntryVariable equivalent of BootEntry
+	latestKernelEntry := km.bootEntries[0]
+	latestKernelEntryVar, err := km.bootManager.FindBootEntryVar(&latestKernelEntry, km.targetDir)
+	// Ensure the variable exists
+	if err != nil {
+		return false, fmt.Errorf("Unable to find latest kernel boot variable: %v", err)
+	} else if latestKernelEntryVar == nil {
+		return false, fmt.Errorf("Unable to find latest kernel boot entry")
+	}
+
+	// Determine if the BootEntryVariable is the BootCurrent variable
+	if latestKernelEntryVar.BootNumber == km.bootManager.bootCurrent {
+		return true, nil
+	} else {
+		return false, nil
+	}
 }
