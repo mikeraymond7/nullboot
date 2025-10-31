@@ -381,3 +381,98 @@ func TestKernelManagerSetLatestKernelToBootNext(t *testing.T) {
 		t.Errorf("internal BootNext is not correct, expected: %v, got: %v", expectedInternalBootNext, km.bootManager.bootNext)
 	}
 }
+
+func TestKernelManagerIsCurrentBootLatest(t *testing.T) {
+	const latestKernelVersion = "3"
+	tests := map[string]struct {
+		kernelVersionMap map[int]string // Maps BootNumber to kernel version
+		bootCurrent      int
+		expected         bool
+		isErr            bool
+	}{
+		"BootCurrent is latest": {
+			kernelVersionMap: map[int]string{
+				1: "3",
+				3: "0",
+			},
+			bootCurrent: 1,
+			expected:    true,
+			isErr:       false,
+		},
+		"BootCurrent is not latest": {
+			kernelVersionMap: map[int]string{
+				1: "1",
+				3: "3",
+			},
+			bootCurrent: 1,
+			expected:    false,
+			isErr:       false,
+		},
+		"Latest does not exist": {
+			kernelVersionMap: map[int]string{
+				1: "1",
+				3: "0",
+			},
+			bootCurrent: 1,
+			expected:    false,
+			isErr:       true,
+		},
+	}
+	for testName, tt := range tests {
+		t.Logf("Testing: %s", testName)
+
+		appArchitecture = "x64"
+		memFs := afero.NewMemMapFs()
+		appFs = MapFS{memFs}
+
+		mockEntries := make(map[int]BootEntryVariable)
+		targetDir := "/boot/efi/EFI/ubuntu"
+		shimPath := path.Join(targetDir, "shimx64.efi")
+		afero.WriteFile(memFs, shimPath, []byte("file a"), 0644)
+
+		efivars := MockEFIVariables{}
+		dp, err := efivars.NewFileDevicePath(shimPath, efi_linux.ShortFormPathHD)
+		if err != nil {
+			t.Fatalf("unable to create shim device path: %v", err)
+		}
+		var latestKernelEntry *BootEntry
+		for bootNum, version := range tt.kernelVersionMap {
+			kernelName := fmt.Sprintf("kernel.efi-%s", version)
+			entry := NewKernelBootEntry("Ubuntu", kernelName, "")
+
+			bootEntryVariable, err := NewBootEntryVariable(entry, bootNum, dp)
+			if err != nil {
+				t.Fatalf("unable to create boot entry variable for %s: %v", kernelName, err)
+			}
+			if version == latestKernelVersion {
+				latestKernelEntry = &entry
+			}
+			mockEntries[bootNum] = bootEntryVariable
+		}
+		bm := BootManager{
+			efivars:     &efivars,
+			entries:     mockEntries,
+			bootCurrent: tt.bootCurrent,
+			bootNext:    invalidBootNumber,
+		}
+
+		bootEntries := []BootEntry{}
+		if latestKernelEntry != nil {
+			bootEntries = []BootEntry{*latestKernelEntry}
+		}
+		km := KernelManager{
+			targetDir:   targetDir,
+			bootEntries: bootEntries,
+			bootManager: &bm,
+		}
+		isCurrentBootLatest, err := km.IsCurrentBootLatest()
+		if err != nil {
+			if !tt.isErr {
+				t.Errorf("%s: unexpected error: %v", testName, err)
+			}
+		}
+		if isCurrentBootLatest != tt.expected {
+			t.Errorf("%s: expected %t, got %t", testName, tt.expected, isCurrentBootLatest)
+		}
+	}
+}
