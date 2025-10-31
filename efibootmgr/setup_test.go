@@ -23,7 +23,7 @@ type MockEnv struct {
 //
 // Returns a pointer to a MockEnv or nil and an error if the environment
 // cannot be initialized.
-func NewMockEnv(installedKernels []int, entryBootNums []int, bootOrder []int) (*MockEnv, error) {
+func NewMockEnv(installedKernels []int, entryBootNums []int, bootOrder []int, bootCurrent int) (*MockEnv, error) {
 	var mockEnv MockEnv
 
 	// Test filesystem
@@ -76,6 +76,7 @@ func NewMockEnv(installedKernels []int, entryBootNums []int, bootOrder []int) (*
 
 	// Encode inputs for mock efivars
 	bootOrderBytes := EncodeBootOrder(bootOrder)
+	bootCurrentBytes := getBootNumBytes(bootCurrent)
 	entriesBytes := make(map[int][]byte)
 	for bootNum, bootEntryVar := range entries {
 		entryBytes, err := bootEntryVar.LoadOption.Bytes()
@@ -85,7 +86,7 @@ func NewMockEnv(installedKernels []int, entryBootNums []int, bootOrder []int) (*
 		entriesBytes[bootNum] = entryBytes
 	}
 
-	mockvars := GetMockEFIVars(bootOrderBytes, entriesBytes)
+	mockvars := GetMockEFIVars(bootOrderBytes, entriesBytes, bootCurrentBytes)
 
 	// Mock Boot Manager
 	attrib := defaultAttrib()
@@ -93,6 +94,7 @@ func NewMockEnv(installedKernels []int, entryBootNums []int, bootOrder []int) (*
 		efivars:        &mockvars,
 		entries:        entries,
 		bootOrder:      bootOrder,
+		bootCurrent:    bootCurrent,
 		bootOrderAttrs: attrib,
 	}
 	km, err := NewKernelManager("/boot/efi", "/usr/lib/linux", "ubuntu", &bm)
@@ -125,11 +127,14 @@ func SetupTestFs() *afero.Fs {
 // GetMockEFIVars provides an interface to create a MockEFIVariables from
 // a specific set of entries rather than using the Get and Set functions
 // after creation.
-func GetMockEFIVars(bootOrder []byte, entries map[int][]byte) MockEFIVariables {
+func GetMockEFIVars(bootOrder []byte, entries map[int][]byte, bootCurrent []byte) MockEFIVariables {
 	efiStore := map[efi.VariableDescriptor]mockEFIVariable{}
 	attrib := defaultAttrib()
 	if bootOrder != nil {
 		efiStore[efi.VariableDescriptor{GUID: efi.GlobalVariable, Name: "BootOrder"}] = mockEFIVariable{bootOrder, attrib}
+	}
+	if bootCurrent != nil {
+		efiStore[efi.VariableDescriptor{GUID: efi.GlobalVariable, Name: "BootCurrent"}] = mockEFIVariable{bootCurrent, attrib}
 	}
 	for key, val := range entries {
 		efiStore[efi.VariableDescriptor{GUID: efi.GlobalVariable, Name: fmt.Sprintf("Boot%04X", key)}] = mockEFIVariable{val, attrib}
