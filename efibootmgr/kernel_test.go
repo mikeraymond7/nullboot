@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/canonical/go-efilib"
+	efi_linux "github.com/canonical/go-efilib/linux"
 	"github.com/spf13/afero"
 	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
@@ -287,5 +288,71 @@ func TestKernelManagerRegisterNewKernelEFIs(t *testing.T) {
 			len(km.bootManager.entries),
 			len(kernelNames),
 		)
+	}
+}
+
+func TestKernelManagerSetKernelFallback(t *testing.T) {
+	// Setup mocked/global filesystem
+	appArchitecture = "x64"
+	memFs := afero.NewMemMapFs()
+	appFs = MapFS{memFs}
+
+	targetDir := "/boot/efi/EFI/ubuntu"
+	sourceDir := "/usr/lib/linux"
+
+	shimPath := path.Join(targetDir, "shimx64.efi")
+	afero.WriteFile(memFs, shimPath, []byte("file a"), 0644)
+
+	// Map a number of BootNumbers to a set of kernel versions
+	kernelVersionMap := map[int]string{
+		1: "1",
+		2: "100", // This will be the latest kernel
+		3: "10",
+	}
+
+	efivars := MockEFIVariables{}
+	bm, _ := NewBootManagerForVariables(&efivars)
+
+	dp, err := efivars.NewFileDevicePath(shimPath, efi_linux.ShortFormPathHD)
+	if err != nil {
+		t.Fatalf("unable to create shim device path: %v", err)
+	}
+	for bootNumber, kernelVersion := range kernelVersionMap {
+		kernelName := fmt.Sprintf("kernel.efi-%s", kernelVersion)
+		kernelSourcePath := path.Join(sourceDir, kernelName)
+		kernelTargetPath := path.Join(targetDir, kernelName)
+
+		// Must be written to file to be read by NewKernelManager and InstallKernels
+		afero.WriteFile(memFs, kernelSourcePath, []byte(kernelName), 0644)
+		afero.WriteFile(memFs, kernelTargetPath, []byte(kernelName), 0644)
+
+		// NOTE: create entries this way in the test so boot number can be controlled
+		entry := NewKernelBootEntry("Ubuntu", kernelName, "")
+		bootEntryVariable, err := NewBootEntryVariable(entry, bootNumber, dp)
+		if err != nil {
+			t.Fatalf("unable to create boot entry variable for %s: %v", kernelName, err)
+		}
+		bm.SetBootEntryVariable(bootEntryVariable)
+	}
+
+	// This reads the kernel files in version order
+	km, err := NewKernelManager("/boot/efi", sourceDir, "ubuntu", &bm)
+	// Populate km.bootEntries (also in version order)
+	km.InstallKernels()
+
+	if err := km.SetKernelFallback(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	} else {
+		// Check BootNext is set correctly in BootManager and on mocked system
+		expectedInternalBootNext := 2
+		expectedSystemBootNext := getBootNumBytes(expectedInternalBootNext)
+		systemBootNext, _, _ := km.bootManager.efivars.GetVariable(efi.GlobalVariable, "BootNext")
+
+		if !bytes.Equal(systemBootNext, expectedSystemBootNext) {
+			t.Errorf("system BootNext is not correct, expected: %v, got: %v", expectedSystemBootNext, systemBootNext)
+		}
+		if km.bootManager.bootNext != expectedInternalBootNext {
+			t.Errorf("internal BootNext is not correct, expected: %v, got: %v", expectedInternalBootNext, km.bootManager.bootNext)
+		}
 	}
 }

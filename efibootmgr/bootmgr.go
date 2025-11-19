@@ -72,6 +72,7 @@ type BootManager struct {
 	entries        map[int]BootEntryVariable // The Boot<number> variables
 	bootOrder      []int                     // The BootOrder variable, parsed
 	bootCurrent    int                       // The BootCurrent variable, parsed
+	bootNext       int                       // The BootNext variable, parsed
 	bootOrderAttrs efi.VariableAttributes    // The attributes of BootOrder variable
 }
 
@@ -85,6 +86,7 @@ func NewBootManagerForVariables(efivars EFIVariables) (BootManager, error) {
 	var err error
 	bm := BootManager{}
 	bm.efivars = efivars
+	bm.bootNext = invalidBootNumber
 
 	if !VariablesSupported(efivars) {
 		return BootManager{}, fmt.Errorf("Variables not supported")
@@ -262,6 +264,13 @@ func (bm *BootManager) DeleteEntry(bootNum int) error {
 	}
 	delete(bm.entries, bootNum)
 
+	if bootNum == bm.bootNext {
+		if err := DelVariable(bm.efivars, efi.GlobalVariable, "BootNext"); err != nil {
+			return err
+		}
+		bm.bootNext = -1
+	}
+
 	var newOrder []int
 
 	for _, orderEntry := range bm.bootOrder {
@@ -299,8 +308,7 @@ func (bm *BootManager) PrependAndSetBootOrder(head []int) error {
 	// Encode the boot order to bytes
 	var output []byte
 	for _, num := range newOrder {
-		var numBytes [2]byte
-		binary.LittleEndian.PutUint16(numBytes[0:], uint16(num))
+		numBytes := getBootNumBytes(num)
 		output = append(output, numBytes[0], numBytes[1])
 	}
 
@@ -321,6 +329,24 @@ func GetBootEntryName(bootNum int) string {
 	return fmt.Sprintf("Boot%04X", bootNum)
 }
 
+// SetBootNext sets the system BootNext variable to the encoded value of
+// the input boot number.
+//
+// Returns an error in the event that the variable cannot be set.
+func (bm *BootManager) SetBootNext(bootNum int) error {
+	_, _, err := bm.efivars.GetVariable(efi.GlobalVariable, GetBootEntryName(bootNum))
+	if err != nil {
+		return fmt.Errorf("unable to find %s: %w", GetBootEntryName(bootNum), err)
+	}
+	bootNumBytes := getBootNumBytes(bootNum)
+	if err := bm.efivars.SetVariable(efi.GlobalVariable, "BootNext", bootNumBytes[0:], bm.bootOrderAttrs); err != nil {
+		return err
+	}
+
+	bm.bootNext = bootNum
+	return nil
+}
+
 // newEFILoadOption derives a standardized LoadOption from a specified entry
 // and device path.
 //
@@ -335,4 +361,13 @@ func newEFILoadOption(entry BootEntry, dp efi.DevicePath) *efi.LoadOption {
 		OptionalData: optionalData.Bytes()}
 
 	return loadoption
+}
+
+// getBootNumBytes converts a boot number integer into the system format.
+//
+// Returns a 2-length []byte of little-endian oriented uint16s.
+func getBootNumBytes(bootNum int) []byte {
+	numBytes := make([]byte, 2)
+	binary.LittleEndian.PutUint16(numBytes[:], uint16(bootNum))
+	return numBytes
 }
