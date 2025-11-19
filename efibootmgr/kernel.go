@@ -212,3 +212,22 @@ func (km *KernelManager) CommitToBootLoader() error {
 
 	return nil
 }
+
+// SetKernelFallback sets the latest kernel to be BootNext.
+//
+// Returns an error if the entry does not yet exist as a BootEntryVariable
+// or if there is an error setting BootNext.
+func (km *KernelManager) SetKernelFallback() error {
+	latestKernel := km.bootEntries[0]
+	bootVar, err := km.bootManager.FindBootEntryVar(&latestKernel, km.targetDir)
+	if err != nil {
+		return fmt.Errorf("Failure to find boot variable for %s, %v: %w", latestKernel.Label, latestKernel.Options, err)
+	} else if bootVar == nil {
+		return fmt.Errorf("The latest kernel entry does not exist on the system: %s", latestKernel.Label)
+	}
+	if err := km.bootManager.SetBootNext(bootVar.BootNumber); err != nil {
+		return fmt.Errorf("Failure to set BootNext for %s, Boot%04X: %w", latestKernel.Label, bootVar.BootNumber, err)
+	}
+
+	return nil
+}

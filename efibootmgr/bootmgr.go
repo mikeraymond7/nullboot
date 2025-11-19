@@ -34,6 +34,7 @@ type BootManager struct {
 	entries        map[int]BootEntryVariable // The Boot<number> variables
 	bootOrder      []int                     // The BootOrder variable, parsed
 	bootCurrent    int                       // The BootCurrent variable, parsed
+	bootNext       int                       // The BootNext variable, parsed
 	bootOrderAttrs efi.VariableAttributes    // The attributes of BootOrder variable
 }
 
@@ -47,6 +48,7 @@ func NewBootManagerForVariables(efivars EFIVariables) (BootManager, error) {
 	var err error
 	bm := BootManager{}
 	bm.efivars = efivars
+	bm.bootNext = -1
 
 	if !VariablesSupported(efivars) {
 		return BootManager{}, fmt.Errorf("Variables not supported")
@@ -209,6 +211,13 @@ func (bm *BootManager) DeleteEntry(bootNum int) error {
 	}
 	delete(bm.entries, bootNum)
 
+	if bootNum == bm.bootNext {
+		if err := DelVariable(bm.efivars, efi.GlobalVariable, "BootNext"); err != nil {
+			return err
+		}
+		bm.bootNext = -1
+	}
+
 	var newOrder []int
 
 	for _, orderEntry := range bm.bootOrder {
@@ -252,6 +261,7 @@ func (bm *BootManager) PrependAndSetBootOrder(head []int) error {
 //
 // Returns an error in the event that the variable cannot be set.
 func (bm *BootManager) SetBootOrder(bootOrder []int) error {
+	// Encode the boot order to bytes
 	output := EncodeBootOrder(bootOrder)
 
 	// Set the boot order and update our cache
@@ -259,6 +269,24 @@ func (bm *BootManager) SetBootOrder(bootOrder []int) error {
 		return fmt.Errorf("Unable to set BootOrder: %v", err)
 	}
 	bm.bootOrder = bootOrder
+	return nil
+}
+
+// SetBootNext sets the system BootNext variable to the encoded value of
+// the input boot number.
+//
+// Returns an error in the event that the variable cannot be set.
+func (bm *BootManager) SetBootNext(bootNum int) error {
+	_, _, err := bm.efivars.GetVariable(efi.GlobalVariable, fmt.Sprintf("Boot%04X", bootNum))
+	if err != nil {
+		return fmt.Errorf("Unable to find Boot%04X: %v", bootNum, err)
+	}
+	bootNumBytes := getBootNumBytes(bootNum)
+	if err := bm.efivars.SetVariable(efi.GlobalVariable, "BootNext", bootNumBytes[0:], bm.bootOrderAttrs); err != nil {
+		return err
+	}
+
+	bm.bootNext = bootNum
 	return nil
 }
 
@@ -349,5 +377,4 @@ func getBootNumBytes(bootNum int) []byte {
 	numBytes := make([]byte, 2)
 	binary.LittleEndian.PutUint16(numBytes[:], uint16(bootNum))
 	return numBytes
-
 }

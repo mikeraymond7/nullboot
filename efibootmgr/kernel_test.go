@@ -221,3 +221,55 @@ func TestKernelManagerRemoveObsoleteKernels(t *testing.T) {
 	}
 
 }
+
+func TestKernelManagerSetKernelFallback(t *testing.T) {
+	type TestCase struct {
+		name             string
+		installedKernels []int
+		bootVariables    []int
+		expected         int
+		isErr            bool
+	}
+	tests := []TestCase{
+		{
+			name:             "Set existing entry to fallback",
+			installedKernels: []int{2, 3},
+			bootVariables:    []int{2, 5, 7},
+			isErr:            false,
+		},
+		{
+			name:             "Set non-existing entry to fallback",
+			installedKernels: []int{6, 1},
+			bootVariables:    []int{1, 5},
+			isErr:            true,
+		},
+	}
+	for _, tt := range tests {
+		t.Logf("Testing: %s", tt.name)
+		var bootOrder []int
+		var bootCurrent int
+		mockEnv, err := NewMockEnv(tt.installedKernels, tt.bootVariables, bootOrder, bootCurrent)
+		if err != nil {
+			t.Fatalf("Unable to initialize mock environment: %v", err)
+		}
+
+		// Function to test
+		if err := mockEnv.km.SetKernelFallback(); err != nil {
+			if !tt.isErr {
+				t.Errorf("Unexpected error: %v", err)
+			}
+		} else {
+			// Check BootNext is set correctly
+			expectedInternalBootNext := tt.installedKernels[0]
+			expectedSystemBootNext := getBootNumBytes(expectedInternalBootNext)
+			systemBootNext, _, _ := mockEnv.km.bootManager.efivars.GetVariable(efi.GlobalVariable, "BootNext")
+
+			if !bytes.Equal(systemBootNext, expectedSystemBootNext) {
+				t.Errorf("System BootNext is not correct, expected: %v, got: %v", expectedSystemBootNext, systemBootNext)
+			}
+			if mockEnv.km.bootManager.bootNext != expectedInternalBootNext {
+				t.Errorf("Internal BootNext is not correct, expected: %v, got: %v", expectedInternalBootNext, mockEnv.km.bootManager.bootNext)
+			}
+		}
+	}
+}
