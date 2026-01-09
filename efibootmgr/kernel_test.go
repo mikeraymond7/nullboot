@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"fmt"
 	"io/ioutil"
+	"path"
 	"reflect"
 	"strings"
 	"testing"
@@ -80,6 +81,10 @@ func TestKernelManagerNewAndInstallKernels(t *testing.T) {
 		t.Error(err)
 	}
 
+	if err := km.RegisterNewKernelEFIs(); err != nil {
+		t.Errorf("could not register new Kernels as EFIs: %v", err)
+	}
+
 	if err := km.CommitToBootLoader(); err != nil {
 		t.Errorf("Could not commit to bootloader: %v", err)
 	}
@@ -142,6 +147,10 @@ func TestKernelManager_noCmdLine(t *testing.T) {
 	km, err := NewKernelManager("/boot/efi", "/usr/lib/linux", "ubuntu", &bm)
 	if err := km.InstallKernels(); err != nil {
 		t.Errorf("Could not install kernels: %v", err)
+	}
+
+	if err := km.RegisterNewKernelEFIs(); err != nil {
+		t.Errorf("could not register new Kernels as EFIs: %v", err)
 	}
 
 	if err := km.CommitToBootLoader(); err != nil {
@@ -220,4 +229,63 @@ func TestKernelManagerRemoveObsoleteKernels(t *testing.T) {
 		t.Errorf("expected list of target kernels to be empty now, got: %v", km.targetKernels)
 	}
 
+}
+
+func TestKernelManagerRegisterNewKernelEFIs(t *testing.T) {
+	appArchitecture = "x64"
+	memFs := afero.NewMemMapFs()
+	appFs = MapFS{memFs}
+
+	esp := "/boot/efi"
+	targetDir := "/boot/efi/EFI/ubuntu"
+	sourceDir := "/usr/lib/linux"
+
+	// Generate fake kernel files
+	kernelNames := []string{
+		"kernel.efi-1",
+		"kernel.efi-2",
+		"kernel.efi-6",
+		"kernel.efi-3",
+		"kernel.efi-5",
+	}
+	for _, kernelName := range kernelNames {
+		kernelSourcePath := path.Join(sourceDir, kernelName)
+		kernelTargetPath := path.Join(targetDir, kernelName)
+		afero.WriteFile(memFs, kernelSourcePath, []byte(kernelName), 0644)
+		afero.WriteFile(memFs, kernelTargetPath, []byte(kernelName), 0644)
+	}
+
+	efivars := MockEFIVariables{}
+	bm, err := NewBootManagerForVariables(&efivars)
+	if err != nil {
+		t.Fatalf("unable to create BootManager: %v", err)
+	}
+
+	// Pre-generate a couple of EFI variables to test no duplication
+	preGenNum := 2
+	for i := range preGenNum {
+		kernelName := kernelNames[i]
+		entry := NewKernelBootEntry("Ubuntu", kernelName, "")
+		bm.FindOrCreateEntry(entry, targetDir)
+	}
+
+	shimPath := path.Join(targetDir, "shimx64.efi")
+	afero.WriteFile(memFs, shimPath, []byte("file a"), 0644)
+
+	km, _ := NewKernelManager(esp, sourceDir, "ubuntu", &bm)
+	if err != nil {
+		t.Fatalf("unable to create KernelManager: %v", err)
+	}
+	if err := km.InstallKernels(); err != nil {
+		t.Fatalf("unable to install kernels: %v", err)
+	}
+
+	km.RegisterNewKernelEFIs()
+	if len(km.bootManager.entries) != len(kernelNames) {
+		t.Errorf(
+			"Expected %d entries to be created but found %d",
+			len(km.bootManager.entries),
+			len(kernelNames),
+		)
+	}
 }
