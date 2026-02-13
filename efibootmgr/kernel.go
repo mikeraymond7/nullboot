@@ -5,8 +5,9 @@
 package efibootmgr
 
 import (
+	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"path"
 	"sort"
@@ -15,32 +16,76 @@ import (
 	"github.com/knqyf263/go-deb-version"
 )
 
+const (
+	kernelPrefix    = "kernel.efi-"
+	kernelPrefixLen = len(kernelPrefix)
+)
+
+type KernelEntry struct {
+	kernel Kernel
+	entry  BootEntry
+}
+
+type VersionParsingError struct {
+	Message string
+	Err     error
+}
+
+func (e VersionParsingError) Error() string {
+	return e.Message
+}
+
+func (e VersionParsingError) Unwrap() error {
+	return e.Err
+}
+
+type Kernel struct {
+	Version  version.Version
+	FilePath string
+}
+
+func (k *Kernel) GetKernelName() string {
+	return path.Base(k.FilePath)
+}
+
+func NewKernel(kernelPath string) (Kernel, error) {
+	kernelName := path.Base(kernelPath)
+	if versionStr, err := getKernelABI(kernelName); err == nil {
+		v, err := version.NewVersion(versionStr)
+		if err != nil {
+			err = fmt.Errorf("could not parse kernel version of %s: %w", kernelName, err)
+			return Kernel{}, VersionParsingError{Message: err.Error(), Err: err}
+		}
+		return Kernel{v, kernelPath}, nil
+	}
+	return Kernel{}, fmt.Errorf("unrecognized kernel naming format: %s", kernelName)
+}
+
+type UEFIBootAsset struct {
+	entry    BootEntry
+	entryVar BootEntryVariable
+}
+
 // KernelManager manages kernels in an SP vendor directory.
 //
 // It will update or install shim, copy in any new kernels,
 // remove old kernels, and configure boot in shim and BDS.
 type KernelManager struct {
-	sourceDir     string       // sourceDir is the location to copy kernels from
-	targetDir     string       // targetDir is a vendor directory on the ESP
-	sourceKernels []string     // kernels in sourceDir
-	targetKernels []string     // kernels in targetDir
-	bootEntries   []BootEntry  // boot entries filled by InstallKernels
-	kernelOptions string       // options to pass to kernel
-	bootManager   *BootManager // The EFI boot manager
+	sourceDir     string // sourceDir is the location to copy kernels from
+	targetDir     string // targetDir is a vendor directory on the ESP
+	kernelOptions string // options to pass to kernel
 }
 
 // NewKernelManager returns a new kernel manager managing kernels in the host system
-func NewKernelManager(esp, sourceDir, vendor string, bootManager *BootManager) (*KernelManager, error) {
+func NewKernelManager(esp, sourceDir, vendor string) (*KernelManager, error) {
 	var km KernelManager
-	var err error
 
 	km.sourceDir = sourceDir
 	km.targetDir = path.Join(esp, "EFI", vendor)
-	km.bootManager = bootManager
 
 	if file, err := appFs.Open("/etc/kernel/cmdline"); err == nil {
 		defer file.Close()
-		data, err := ioutil.ReadAll(file)
+		data, err := io.ReadAll(file)
 		if err != nil {
 			return nil, fmt.Errorf("Cannot read kernel command line: %w", err)
 		}
@@ -48,114 +93,118 @@ func NewKernelManager(esp, sourceDir, vendor string, bootManager *BootManager) (
 		km.kernelOptions = strings.TrimSpace(string(data))
 	}
 
-	km.sourceKernels, err = km.readKernels(km.sourceDir)
-	if err != nil {
-		return nil, err
-	}
-	km.targetKernels, err = km.readKernels(km.targetDir)
-	if err != nil {
-		return nil, err
-	}
-
 	return &km, nil
 }
 
+func (km *KernelManager) GetSourceKernels() ([]Kernel, error) {
+	return km.readKernels(km.sourceDir)
+}
+
+func (km *KernelManager) GetTargetKernels() ([]Kernel, error) {
+	return km.readKernels(km.targetDir)
+}
+
 // readKernels returns a list of all kernels in the
-func (km *KernelManager) readKernels(dir string) ([]string, error) {
-	var kernels []string
+func (km *KernelManager) readKernels(dir string) ([]Kernel, error) {
+	var kernels []Kernel
 	entries, err := appFs.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("Could not determine kernels: %w", err)
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "kernel.efi-") {
-			kernels = append(kernels, e.Name())
+		kernel, err := NewKernel(path.Join(dir, e.Name()))
+		if err != nil {
+			var vpe *VersionParsingError
+			// This means the kernel starts with "kernel.efi-" but there is
+			// a problem with the version sequence after that string
+			if errors.As(err, &vpe) {
+				return []Kernel{}, err
+			}
+			// This is likely an item in sourceDir that isn't a kernel
+			continue
 		}
+		kernels = append(kernels, kernel)
 	}
 	// Sort descending
 	sort.Slice(kernels, func(i, j int) bool {
-		a, e := version.NewVersion(kernels[i][len("kernel.efi-"):])
-		if e != nil {
-			err = fmt.Errorf("Could not parse kernel version of %s: %w", kernels[i], e)
-			return false
-		}
-		b, e := version.NewVersion(kernels[j][len("kernel.efi-"):])
-		if e != nil {
-			err = fmt.Errorf("Could not parse kernel version of %s: %w", kernels[j], e)
-			return false
-		}
+		a := kernels[i].Version
+		b := kernels[j].Version
 		return a.GreaterThan(b)
 	})
 	return kernels, err
 }
 
 // getKernelABI returns the kernel ABI part of the kernel filename
-func getKernelABI(kernel string) string {
-	return kernel[len("kernel.efi-"):]
+func getKernelABI(kernel string) (string, error) {
+	if strings.HasPrefix(kernel, kernelPrefix) {
+		return kernel[kernelPrefixLen:], nil
+	}
+	return "", fmt.Errorf("unknown naming format of kernel %s, unable to parse ABI", kernel)
 }
 
-// InstallKernels installs the kernels to the ESP and builds up the boot entries
-// to commit using CommitToBootLoader()
-func (km *KernelManager) InstallKernels() error {
-	km.bootEntries = nil
-	for _, sk := range km.sourceKernels {
-		updated, err := MaybeUpdateFile(path.Join(km.targetDir, sk),
-			path.Join(km.sourceDir, sk))
+// Installs kernels to the ESP
+func (km *KernelManager) InstallKernels(kernels []Kernel) ([]Kernel, error) {
+	tgtKernels := []Kernel{}
+	sourceKernels, err := km.GetSourceKernels()
+	if err != nil {
+		return []Kernel{}, fmt.Errorf("unable to get source kernels: %w", err)
+	}
+	for _, sk := range sourceKernels {
+		kName := sk.GetKernelName()
+		tgtPath := path.Join(km.targetDir, kName)
+		updated, err := MaybeUpdateFile(tgtPath, sk.FilePath)
 		if err != nil {
-			log.Printf("Could not install kernel %s: %v", sk, err)
+			log.Printf("Could not install kernel %s: %v", kName, err)
 			continue
 		}
 		if updated {
-			log.Printf("Installed or updated kernel %s", sk)
+			log.Printf("Installed or updated kernel %s", kName)
 		}
-		km.bootEntries = append(
-			km.bootEntries,
-			NewKernelBootEntry("Ubuntu", sk, km.kernelOptions),
-		)
+		tgtKernel, err := NewKernel(tgtPath)
+		tgtKernels = append(tgtKernels, tgtKernel)
 	}
 
-	return nil
+	return tgtKernels, nil
 }
 
-// RegisterNewKernelEFIs creates EFI variables for each new kernel
-// installed via InstallKernels, adding them to the BootManager and
-// creating the variables on the host machine.
-func (km *KernelManager) RegisterNewKernelEFIs() error {
-	for _, entry := range km.bootEntries {
-		if _, err := km.bootManager.FindOrCreateEntry(entry, km.targetDir); err != nil {
-			return fmt.Errorf("unable to find or create EFI boot entry for %s: %w", entry.Label, err)
+// RegisterNewKernelEFIs creates EFI variables for each new kernel and
+// registers them on the host machine.
+func RegisterKernelEFIs(kernelEntries []KernelEntry) error {
+	for _, k := range kernelEntries {
+		relativeDir := path.Dir(k.kernel.FilePath)
+		if _, err := FindOrCreateEntry(k.entry, relativeDir); err != nil {
+			return fmt.Errorf("unable to create EFI Boot Entry for %s: %w", k.kernel.FilePath, err)
 		}
 	}
 	return nil
-}
-
-// IsObsoleteKernel checks whether a kernel is obsolete.
-func (km *KernelManager) isObsoleteKernel(k string) bool {
-	for _, sk := range km.sourceKernels {
-		if sk == k {
-			return false
-		}
-	}
-	return true
 }
 
 // RemoveObsoleteKernels removes old kernels in the ESP vendor directory
 func (km *KernelManager) RemoveObsoleteKernels() error {
-	var remaining []string
-	for _, tk := range km.targetKernels {
-		if !km.isObsoleteKernel(tk) {
-			continue
+	sourceKernels, err := km.GetSourceKernels()
+	if err != nil {
+		return fmt.Errorf("unable to get source kernels: %w", err)
+	}
+	targetKernels, err := km.GetTargetKernels()
+	if err != nil {
+		return fmt.Errorf("unable to get target kernels: %w", err)
+	}
+
+	for _, tk := range targetKernels {
+		// Only kernels with a source and target are kept
+		for _, sk := range sourceKernels {
+			if sk == tk {
+				continue
+			}
 		}
-		if err := appFs.Remove(path.Join(km.targetDir, tk)); err != nil {
-			log.Printf("Could not remove kernel %s: %v", tk, err)
-			remaining = append(remaining, tk)
+
+		if err := appFs.Remove(path.Join(km.targetDir, tk.filename)); err != nil {
+			log.Printf("Could not remove kernel %s: %v", tk.filename, err)
 			continue
 		}
 
 		log.Printf("Removed kernel %s", tk)
 	}
-
-	km.targetKernels = remaining
 
 	return nil
 }
@@ -165,7 +214,11 @@ func (km *KernelManager) CommitToBootLoader() error {
 	log.Print("Configuring shim fallback loader")
 
 	// We completely own the shim fallback file, so just write it
-	if err := WriteShimFallbackToFile(path.Join(km.targetDir, "BOOT"+strings.ToUpper(GetEfiArchitecture())+".CSV"), km.bootEntries); err != nil {
+	bootEntries := []BootEntry{}
+	for _, kernelEntry := range km.kernelEntries {
+		bootEntries = append(bootEntries, kernelEntry.entry)
+	}
+	if err := WriteShimFallbackToFile(path.Join(km.targetDir, "BOOT"+strings.ToUpper(GetEfiArchitecture())+".CSV"), bootEntries); err != nil {
 		log.Printf("Failed to configure shim fallback loader: %v", err)
 	}
 
@@ -179,8 +232,8 @@ func (km *KernelManager) CommitToBootLoader() error {
 	var ourBootOrder []int
 
 	// Add new entries, find existing ones and build target boot order
-	for _, entry := range km.bootEntries {
-		entryVar, err := km.bootManager.FindBootEntryVariable(entry, km.targetDir)
+	for _, kernelEntry := range km.kernelEntries {
+		entryVar, err := km.bootManager.FindBootEntryVariable(kernelEntry.entry, km.targetDir)
 		if err != nil {
 			return fmt.Errorf("failure to find boot entry for %s: %w", entry.Label, err)
 		}
@@ -224,23 +277,25 @@ func (km *KernelManager) SetLatestKernelToBootNext() error {
 	if err != nil {
 		return fmt.Errorf("unable to get latest kernel entry: %w", err)
 	}
-	latestKernelEntryVar, err := km.bootManager.FindBootEntryVariable(latestKernel, km.targetDir)
+	latestKernelEntry := latestKernel.entry
+	latestKernelEntryVar, err := km.bootManager.FindBootEntryVariable(latestKernelEntry, km.targetDir)
 	if err != nil {
-		return fmt.Errorf("unable to find boot variable for %s, %v: %w", latestKernel.Label, latestKernel.Options, err)
+		return fmt.Errorf("unable to find boot variable for %s, %v: %w", latestKernelEntry.Label, latestKernelEntry.Options, err)
 	}
 	if err := km.bootManager.SetBootNext(latestKernelEntryVar.BootNumber); err != nil {
-		return fmt.Errorf("unable to set BootNext to Boot%04X (%s): %w", latestKernelEntryVar.BootNumber, latestKernel.Label, err)
+		return fmt.Errorf("unable to set BootNext to Boot%04X (%s): %w", latestKernelEntryVar.BootNumber, latestKernelEntry.Label, err)
 	}
 
 	return nil
 }
 
 func (km *KernelManager) IsCurrentBootLatest() (bool, error) {
-	if len(km.bootEntries) == 0 {
+	if len(km.kernelEntries) == 0 {
 		return false, fmt.Errorf("no Ubuntu Kernel EFIs have been loaded")
 	}
 
-	latestKernelEntry, err := km.GetLatestKernelEntry()
+	latestKernel, err := km.GetLatestKernelEntry()
+	latestKernelEntry := latestKernel.entry
 	if err != nil {
 		return false, fmt.Errorf("unable to get latest kernel entry: %w", err)
 	}
@@ -257,12 +312,24 @@ func (km *KernelManager) IsCurrentBootLatest() (bool, error) {
 	}
 }
 
-func (km *KernelManager) GetLatestKernelEntry() (BootEntry, error) {
-	// NOTE: km.bootEntries[0] is expected to be latest kernel due to the
-	// readKernels method that orders kernels by version before they are
-	// installed and populated into bootEntries via InstallKernels
-	if len(km.bootEntries) > 0 {
-		return km.bootEntries[0], nil
+func (km *KernelManager) GetLatestKernelEntry() (KernelEntry, error) {
+	// NOTE: Since readKernels enforces sorting, this is overkill
+	// However, this is an extremely important part of the nullboot
+	// fallback mechanism and is worth a bit of duplication
+	if len(km.kernelEntries) == 0 {
+		return KernelEntry{}, fmt.Errorf("no kernels have been registered to the KernelManager")
+	} else if len(km.kernelEntries) == 1 {
+		return km.kernelEntries[0], nil
 	}
-	return BootEntry{}, fmt.Errorf("no kernels have been registered to the KernelManager")
+
+	curMaxIdx := 0
+	curMaxVersion := km.kernelEntries[0].kernel.version
+	for i := range km.kernelEntries[1:] {
+		curVersion := km.kernelEntries[i].kernel.version
+		if curVersion.GreaterThan(curMaxVersion) {
+			curMaxVersion = curVersion
+			curMaxIdx = i
+		}
+	}
+	return km.kernelEntries[curMaxIdx], nil
 }

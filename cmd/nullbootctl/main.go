@@ -101,7 +101,13 @@ func main() {
 	}
 	// Install new kernels and commit to bootloader config. This
 	// way
-	if err = km.InstallKernels(); err != nil {
+	sourceKernels, err := km.GetSourceKernels()
+	if err != nil {
+		log.Print("Unable to get source kernels: %v", err)
+		os.Exit(1)
+	}
+	targetKernels, err := km.InstallKernels(sourceKernels)
+	if err != nil {
 		log.Print(err)
 		os.Exit(1)
 	}

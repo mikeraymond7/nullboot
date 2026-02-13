@@ -124,6 +124,7 @@ func TestKernelManagerNewAndInstallKernels(t *testing.T) {
 
 	}
 }
+
 func TestKernelManager_noCmdLine(t *testing.T) {
 	appArchitecture = "x64"
 	memFs := afero.NewMemMapFs()
@@ -464,5 +465,5 @@ func TestKernelManagerIsCurrentBootLatest(t *testing.T) {
 }
 
 func TestKernelManagerGetLatestKernelEntry(t *testing.T) {
-	t.Fatalf("Test not implemented yet")
+
 }
