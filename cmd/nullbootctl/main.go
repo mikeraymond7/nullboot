@@ -4,10 +4,16 @@
 
 package main
 
-import "github.com/canonical/nullboot/efibootmgr"
-import "flag"
-import "log"
-import "os"
+import (
+	"flag"
+	"log"
+	"os"
+	"sort"
+
+	efi "github.com/canonical/go-efilib"
+	efi_linux "github.com/canonical/go-efilib/linux"
+	"github.com/canonical/nullboot/efibootmgr"
+)
 
 var noTPM = flag.Bool("no-tpm", false, "Do not do any resealing with the TPM")
 var noEfivars = flag.Bool("no-efivars", false, "Do not use or update the EFI variables")
@@ -46,23 +52,19 @@ func main() {
 		}
 	}
 
-	var maybeBm *efibootmgr.BootManager
 	var efivars efibootmgr.EFIVariables
-	if *outputJSON != "" {
+	if *outputJSON != "" || *noEfivars {
 		efivars = &efibootmgr.MockEFIVariables{}
 	} else {
 		efivars = efibootmgr.RealEFIVariables{}
 	}
-	if !*noEfivars {
-		if bm, err := efibootmgr.NewBootManagerForVariables(efivars); err != nil {
-			log.Println("cannot load efi boot variables:", err)
-			os.Exit(1)
-		} else {
-			maybeBm = &bm
-		}
+
+	if !efibootmgr.VariablesSupported(efivars) {
+		log.Println("EFI Variables are not supported")
+		os.Exit(1)
 	}
 
-	km, err := efibootmgr.NewKernelManager(esp, kernelSourceDir, vendor, maybeBm)
+	km, err := efibootmgr.NewKernelManager(esp, kernelSourceDir, vendor)
 	if err != nil {
 		log.Print(err)
 		os.Exit(1)
@@ -92,16 +94,61 @@ func main() {
 	}
 	// Install new kernels and commit to bootloader config. This
 	// way
-	if err = km.InstallKernels(); err != nil {
+	targetKernels, err := km.InstallSourceKernels()
+	if err != nil {
+		log.Print(err)
+		os.Exit(1)
+	}
+
+	// Sorting ensures that the bootEntries will be sorted in version order
+	// which eventually leads to BootOrder being in version order
+	sort.Slice(targetKernels, func(i, j int) bool {
+		a := targetKernels[i].Version
+		b := targetKernels[j].Version
+		return a.GreaterThan(b)
+	})
+	kernelBootEntries := km.GenerateBootEntries(targetKernels)
+	// In case something goes awry, this can help recover users on reboot
+	// Note the order of bootEntries determines shim fallback boot order
+	km.WriteShimFallback(kernelBootEntries)
+
+	EfiBootEntryNames, err := efibootmgr.GetVariableNames(efivars, efi.GlobalVariable)
+	if err != nil {
+		log.Printf("Error determining EFI Boot Variable Names: %v", err)
+	}
+	entries := []BootEntry
+	for _, bootName := range EfiBootEntryNames {
+
+	}
+	bootOrder, bootOrderAttrs, err := efivars.GetVariable(efi.GlobalVariable, "BootOrder")
+	if err != nil {
+		log.Print("Unable to get 'BootOrder': %v", err)
+		os.Exit(1)
+	}
+
+	// 1. Gather all BootXXXX entries
+	// 2. Create BootXXXX list
+	// If BootEntry corresponds to existing BootXXXX entry append to list
+	// Else create new internal BootXXXX and append to list
+	// Repeat for all BootEntry
+	// 3. Gather BootOrder
+	// 4. Create new BootOrder with internal BootXXXX entries, not adding
+	// BootXXXX twice (i.e. removing any existing BootXXXX from BootOrder
+	// that are already in our internal list)
+	// 5. Determine which BootXXXX entries are obsolete (they won't be in
+	// the BootOrder or internal BootXXXX list)
+	// 6. Write all internal BootXXXX that aren't already on the system
+	// 7. Write new BootOrder on the system
+	// 8. Delete obsolete BootXXXX entries
+	// 9. Re-measure/re-seal
+
+	// Cleanup old entries
+	kernelPaths, err := km.FindObsoleteKernelPaths()
+	if err != nil {
 		log.Print(err)
 		os.Exit(1)
 	}
 	if err = km.CommitToBootLoader(); err != nil {
-		log.Print(err)
-		os.Exit(1)
-	}
-	// Cleanup old entries
-	if err = km.RemoveObsoleteKernels(); err != nil {
 		log.Print(err)
 		os.Exit(1)
 	}

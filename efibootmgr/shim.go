@@ -23,6 +23,20 @@ type BootEntry struct {
 	Description string
 }
 
+func NewBootEntry(kernelOptions string, kernel Kernel) BootEntry {
+	options := "\\" + kernel.filename
+	if kernelOptions != "" {
+		options += " " + kernelOptions
+	}
+	kernelVersionStr := kernel.version.String()
+	return BootEntry{
+		Filename:    "shim" + GetEfiArchitecture() + ".efi",
+		Label:       fmt.Sprintf("Ubuntu with kernel %s", kernelVersionStr),
+		Options:     options,
+		Description: fmt.Sprintf("Ubuntu entry for kernel %s", kernelVersionStr),
+	}
+}
+
 // architectureMaps maps from GOARCH to host
 var architectureMap = map[string]string{
 	"386":      "ia32",

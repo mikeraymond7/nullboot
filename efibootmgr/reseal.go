@@ -243,17 +243,34 @@ func ResealKey(assets *TrustedAssets, km *KernelManager, esp, shimSource, vendor
 
 	var kernels []*secboot_efi.ImageLoadEvent
 
+	sourceKernels, err := km.GetSourceKernels()
+	if err != nil {
+		return fmt.Errorf("unable to get source kernels from %s: %w", km.sourceDir, err)
+	}
+	targetKernels, err := km.GetTargetKernels()
+	if err != nil {
+		return fmt.Errorf("unable to get target kernels from %s: %w", km.targetDir, err)
+	}
+	sourceKernelNames := []string{}
+	targetKernelNames := []string{}
+	for _, sk := range sourceKernels {
+		sourceKernelNames = append(sourceKernelNames, sk.filename)
+	}
+	for _, tk := range targetKernels {
+		targetKernelNames = append(targetKernelNames, tk.filename)
+	}
+
 	for _, x := range []struct {
 		dir   string
 		files []string
 	}{
 		{
 			dir:   km.sourceDir,
-			files: km.sourceKernels,
+			files: sourceKernelNames,
 		},
 		{
 			dir:   km.targetDir,
-			files: km.targetKernels,
+			files: targetKernelNames,
 		},
 	} {
 		for _, n := range x.files {

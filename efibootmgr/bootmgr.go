@@ -21,72 +21,30 @@ const (
 )
 
 // BootEntryVariable defines a boot entry variable
-type BootEntryVariable struct {
-	BootNumber int                    // number of the Boot variable, for example, for Boot0004 this is 4
+type EfiBootEntry struct {
+	Name       string                 // BootXXXX
 	Data       []byte                 // the data of the variable
 	Attributes efi.VariableAttributes // any attributes set on the variable
-	LoadOption *efi.LoadOption        // the data of the variable parsed as a load option, if it is a valid load option
 }
 
-// BootManager manages the boot device selection menu entries (Boot0000...BootFFFF).
-type BootManager struct {
-	efivars        EFIVariables              // EFIVariables implementation
-	entries        map[int]BootEntryVariable // The Boot<number> variables
-	bootOrder      []int                     // The BootOrder variable, parsed
-	bootOrderAttrs efi.VariableAttributes    // The attributes of BootOrder variable
-}
-
-// NewBootManagerFromSystem returns a new BootManager object, initialized with the system state.
-func NewBootManagerFromSystem() (BootManager, error) {
-	return NewBootManagerForVariables(RealEFIVariables{})
-}
-
-// NewBootManagerForVariables returns a boot manager for the given EFIVariables manager
-func NewBootManagerForVariables(efivars EFIVariables) (BootManager, error) {
-	var err error
-	bm := BootManager{}
-	bm.efivars = efivars
-
-	if !VariablesSupported(efivars) {
-		return BootManager{}, fmt.Errorf("Variables not supported")
-	}
-
-	bootOrderBytes, bootOrderAttrs, err := bm.efivars.GetVariable(efi.GlobalVariable, "BootOrder")
+func GetEfiBootEntry(efivars EFIVariables, varName string) (EfiBootEntry, error) {
+	data, attrib, err := efivars.GetVariable(efi.GlobalVariable, varName)
 	if err != nil {
-		log.Println("Could not read BootOrder variable, populating with default, error was:", err)
-		bootOrderBytes = nil
-		bootOrderAttrs = efi.AttributeNonVolatile | efi.AttributeBootserviceAccess | efi.AttributeRuntimeAccess
+		return EfiBootEntry{}, fmt.Errorf("unable to get %s entry: %w", varName, err)
 	}
-	bm.bootOrder = make([]int, len(bootOrderBytes)/2)
-	bm.bootOrderAttrs = bootOrderAttrs
-	for i := 0; i < len(bootOrderBytes); i += 2 {
-		// FIXME: It's probably not valid to assume little-endian here?
-		bm.bootOrder[i/2] = int(binary.LittleEndian.Uint16(bootOrderBytes[i : i+2]))
-	}
+	return EfiBootEntry{varName, data, attrib}, nil
+}
 
-	bm.entries = make(map[int]BootEntryVariable)
-	names, err := GetVariableNames(bm.efivars, efi.GlobalVariable)
+func GetEfiBootVariableNames(efivars EFIVariables) ([]string, error) {
+	return GetVariableNames(efivars, efi.GlobalVariable)
+}
+
+func GetBootEntries(efivars EFIVariables) (EfiBootEntry, error) {
+	names, err := GetEfiBootVariableNames
 	if err != nil {
-		return BootManager{}, fmt.Errorf("cannot obtain list of global variables: %v", err)
+		return
 	}
-	for _, name := range names {
-		var entry BootEntryVariable
-		if parsed, err := fmt.Sscanf(name, "Boot%04X", &entry.BootNumber); len(name) != 8 || parsed != 1 || err != nil {
-			continue
-		}
-		entry.Data, entry.Attributes, err = bm.efivars.GetVariable(efi.GlobalVariable, name)
-		if err != nil {
-			return BootManager{}, fmt.Errorf("cannot read %s: %v", name, err)
-		}
-		entry.LoadOption, err = efi.ReadLoadOption(bytes.NewReader(entry.Data))
-		if err != nil {
-			log.Printf("Invalid boot entry Boot%04X: %s\n", entry.BootNumber, err)
-		}
-
-		bm.entries[entry.BootNumber] = entry
-	}
-
-	return bm, nil
+	return efivars.GetVariable(efi.GlobalVariable, "BootOrder")
 }
 
 // NextFreeEntry returns the number of the next free Boot variable.
